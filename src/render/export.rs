@@ -1,7 +1,9 @@
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::Context;
 
@@ -16,6 +18,7 @@ pub struct ExportJob {
     process: Mutex<Process>,
     progress: Arc<Mutex<f32>>,
     stderr_tail: Arc<Mutex<String>>,
+    output: PathBuf,
 }
 
 struct Process {
@@ -77,7 +80,13 @@ pub fn export_args(
 
 impl ExportJob {
     /// `duration` is the length of the rendered range, used to compute progress.
-    pub fn start(ffmpeg: &Ffmpeg, args: Vec<String>, duration: f64) -> anyhow::Result<Self> {
+    /// `output` is the file `args` write; cancelling deletes it.
+    pub fn start(
+        ffmpeg: &Ffmpeg,
+        args: Vec<String>,
+        duration: f64,
+        output: &Path,
+    ) -> anyhow::Result<Self> {
         let (mut cmd, graph_file) = process::command(ffmpeg, &args, MAX_INLINE_COMMAND_LINE)?;
         let mut child = cmd
             .stdout(Stdio::piped())
@@ -99,6 +108,7 @@ impl ExportJob {
             }),
             progress,
             stderr_tail,
+            output: output.to_owned(),
         })
     }
 
@@ -135,6 +145,8 @@ impl ExportJob {
             let _ = process.child.kill();
             let _ = process.child.wait();
             process.outcome = Some(ExportStatus::Cancelled);
+            let output = self.output.clone();
+            thread::spawn(move || remove_partial(&output));
         }
     }
 }
@@ -142,6 +154,19 @@ impl ExportJob {
 impl Drop for ExportJob {
     fn drop(&mut self) {
         self.cancel();
+    }
+}
+
+/// A launcher shim (scoop) in between kills the real ffmpeg only after it exits itself,
+/// so the output may stay locked for a moment.
+fn remove_partial(output: &Path) {
+    for _ in 0..20 {
+        match std::fs::remove_file(output) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                thread::sleep(Duration::from_millis(100))
+            }
+            _ => return,
+        }
     }
 }
 

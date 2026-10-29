@@ -80,7 +80,7 @@ pub fn start_export(
     request: ExportRequest,
 ) -> anyhow::Result<RunningExport> {
     let args = export_args(project, infos, request.range, &request.output);
-    let job = ExportJob::start(ffmpeg, args, request.range.len())?;
+    let job = ExportJob::start(ffmpeg, args, request.range.len(), &request.output)?;
     Ok(RunningExport {
         job,
         output: request.output,

@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use super::preview::preview_args;
 use super::*;
@@ -124,9 +123,10 @@ fn export_renders_overlapping_clips_in_subrange() {
     let second = tl.source_clip(&fx.testsrc, Track::Video(0), 2.0, 3.0);
     tl.edit(second).audio.mute_regions = vec![Span::new(0.5, 1.0)];
     let output = output_path("overlapping.mp4");
-    let args = export_args(&tl.project, &tl.infos, Span::new(1.0, 4.5), &output);
-    let status = wait(&ExportJob::start(&ffmpeg(), args, 3.5).unwrap());
-    assert_eq!(status, ExportStatus::Finished);
+    assert_eq!(
+        export(&tl, Span::new(1.0, 4.5), &output),
+        ExportStatus::Finished
+    );
     let streams = probe_streams(&output);
     assert_eq!(streams.len(), 2, "{streams:?}");
     for stream in &streams {
@@ -142,9 +142,8 @@ fn export_renders_overlapping_clips_in_subrange() {
 fn export_of_empty_timeline_succeeds() {
     let tl = Timeline::new(320, 180, 30.0);
     let output = output_path("empty.mkv");
-    let args = export_args(&tl.project, &tl.infos, Span::new(0.0, 0.5), &output);
     assert_eq!(
-        wait(&ExportJob::start(&ffmpeg(), args, 0.5).unwrap()),
+        export(&tl, Span::new(0.0, 0.5), &output),
         ExportStatus::Finished
     );
     let streams = probe_streams(&output);
@@ -160,9 +159,8 @@ fn export_places_and_mutes_audio() {
     let clip = tl.source_clip(&fx.red_16x9, Track::Video(0), 1.0, 2.0);
     tl.edit(clip).audio.mute_regions = vec![Span::new(0.5, 1.0)];
     let output = output_path("audio.mkv");
-    let args = export_args(&tl.project, &tl.infos, Span::new(0.0, 3.0), &output);
     assert_eq!(
-        wait(&ExportJob::start(&ffmpeg(), args, 3.0).unwrap()),
+        export(&tl, Span::new(0.0, 3.0), &output),
         ExportStatus::Finished
     );
     let samples = audio_samples(&output);
@@ -183,8 +181,7 @@ fn export_failure_reports_ffmpeg_error() {
     let mut tl = Timeline::new(320, 180, 30.0);
     tl.clip("definitely-missing.mp4", Track::Video(0), 0.0, 1.0);
     let output = output_path("missing.mp4");
-    let args = export_args(&tl.project, &tl.infos, Span::new(0.0, 1.0), &output);
-    let status = wait(&ExportJob::start(&ffmpeg(), args, 1.0).unwrap());
+    let status = export(&tl, Span::new(0.0, 1.0), &output);
     let ExportStatus::Failed(message) = status else {
         panic!("{status:?}");
     };
@@ -210,7 +207,7 @@ fn export_can_be_cancelled() {
     .into_iter()
     .chain([output.to_string_lossy().into_owned()])
     .collect();
-    let mut job = ExportJob::start(&ffmpeg(), args, 600.0).unwrap();
+    let mut job = ExportJob::start(&ffmpeg(), args, 600.0, &output).unwrap();
     wait_until(10, || {
         job.status() != (ExportStatus::Running { progress: 0.0 })
     });
@@ -219,14 +216,7 @@ fn export_can_be_cancelled() {
     );
     job.cancel();
     assert_eq!(job.status(), ExportStatus::Cancelled);
-    drop(job);
-    // A launcher shim (scoop) in between kills the real ffmpeg only after it exits itself,
-    // so the output may stay locked for a moment.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while let Err(e) = std::fs::remove_file(&output) {
-        assert!(Instant::now() < deadline, "ffmpeg still holds output: {e}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_until(5, || !output.exists());
 }
 
 #[test]
@@ -417,7 +407,10 @@ fn output_path(name: &str) -> PathBuf {
     fixtures_dir().join(format!("out-{}-{name}", std::process::id()))
 }
 
-fn wait(job: &ExportJob) -> ExportStatus {
+/// Runs the export to the end.
+fn export(tl: &Timeline, range: Span, output: &Path) -> ExportStatus {
+    let args = export_args(&tl.project, &tl.infos, range, output);
+    let job = ExportJob::start(&ffmpeg(), args, range.len(), output).unwrap();
     wait_until(30, || !matches!(job.status(), ExportStatus::Running { .. }));
     job.status()
 }
