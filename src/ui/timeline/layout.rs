@@ -133,11 +133,14 @@ impl TrackCounts {
         }
     }
 
-    pub fn max(self, other: Self) -> Self {
-        Self {
-            video: self.video.max(other.video),
-            audio: self.audio.max(other.audio),
+    /// One more empty track of the given kind, to drag a clip onto.
+    pub fn with_spare(mut self, video: bool) -> Self {
+        if video {
+            self.video += 1;
+        } else {
+            self.audio += 1;
         }
+        self
     }
 }
 
@@ -358,6 +361,13 @@ mod tests {
         assert_eq!(used, TrackCounts { video: 3, audio: 1 });
         let audio = TrackCounts::of(&project_with(&[Track::Audio(0), Track::Audio(1)]));
         assert_eq!(audio, TrackCounts { video: 1, audio: 2 });
+    }
+
+    #[test]
+    fn spare_track_is_added_to_one_kind() {
+        let base = TrackCounts::of(&Project::default());
+        assert_eq!(base.with_spare(true), TrackCounts { video: 2, audio: 1 });
+        assert_eq!(base.with_spare(false), TrackCounts { video: 1, audio: 2 });
     }
 
     #[test]
