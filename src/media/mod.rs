@@ -1,6 +1,5 @@
 //! Source media inspection: probing, timeline thumbnails, waveforms.
 
-use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -8,10 +7,14 @@ use anyhow::{Context, bail};
 use serde::Deserialize;
 
 use crate::ffmpeg::Ffmpeg;
-use crate::model::SourceId;
 
+mod cache;
+#[cfg(test)]
+mod test_media;
 mod thumbnails;
 mod waveform;
+
+pub use cache::MediaCache;
 
 /// Thumbnail textures are this tall; width follows the source's aspect ratio.
 pub const THUMBNAIL_HEIGHT: u32 = 72;
@@ -40,9 +43,6 @@ pub struct Waveform {
     pub peaks: Vec<f32>,
 }
 
-/// Owns everything derived from source files; extraction runs on background threads.
-pub struct MediaCache {}
-
 pub fn probe(ffmpeg: &Ffmpeg, path: &Path) -> anyhow::Result<MediaInfo> {
     if !path.is_file() {
         bail!("file not found: {}", path.display());
@@ -70,52 +70,6 @@ impl Waveform {
         self.peaks
             .get(first..last)
             .map_or(0.0, |peaks| peaks.iter().copied().fold(0.0, f32::max))
-    }
-}
-
-impl MediaCache {
-    pub fn new(ctx: egui::Context, ffmpeg: Ffmpeg) -> Self {
-        todo!()
-    }
-
-    pub fn set_ffmpeg(&mut self, ffmpeg: Ffmpeg) {
-        todo!()
-    }
-
-    /// Probes synchronously, then starts thumbnail and waveform extraction in the background.
-    pub fn add(&mut self, id: SourceId, path: &Path) -> anyhow::Result<MediaInfo> {
-        todo!()
-    }
-
-    pub fn clear(&mut self) {
-        todo!()
-    }
-
-    /// Call once per frame: collects finished background work and uploads thumbnails as textures.
-    pub fn poll(&mut self) {
-        todo!()
-    }
-
-    pub fn info(&self, id: SourceId) -> Option<&MediaInfo> {
-        todo!()
-    }
-
-    pub fn infos(&self) -> &HashMap<SourceId, MediaInfo> {
-        todo!()
-    }
-
-    /// Why probing or extraction failed, e.g. missing file.
-    pub fn error(&self, id: SourceId) -> Option<&str> {
-        todo!()
-    }
-
-    /// Nearest extracted thumbnail to `source_time`; None while still extracting.
-    pub fn thumbnail(&self, id: SourceId, source_time: f64) -> Option<&egui::TextureHandle> {
-        todo!()
-    }
-
-    pub fn waveform(&self, id: SourceId) -> Option<&Waveform> {
-        todo!()
     }
 }
 
