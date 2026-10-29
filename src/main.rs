@@ -3,6 +3,7 @@
 #![allow(dead_code, unused_variables)]
 
 mod config;
+mod ffmpeg;
 mod model;
 
 fn main() -> eframe::Result {
