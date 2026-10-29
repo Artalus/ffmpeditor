@@ -1,14 +1,20 @@
 //! Turns a project into ffmpeg invocations: final export and still preview frames.
 
+mod export;
 mod graph;
 mod process;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
-use std::path::Path;
+
+// Unused until the app shell is wired up.
+#[allow(unused_imports)]
+pub use export::{ExportJob, export_args};
 
 use crate::ffmpeg::Ffmpeg;
 use crate::media::MediaInfo;
-use crate::model::{Project, SourceId, Span};
+use crate::model::{Project, SourceId};
 
 pub type MediaInfos = HashMap<SourceId, MediaInfo>;
 
@@ -20,39 +26,12 @@ pub enum ExportStatus {
     Cancelled,
 }
 
-pub struct ExportJob {}
-
 /// Renders the composited frame at the playhead in the background; newest request wins.
 pub struct Previewer {}
-
-/// ffmpeg arguments (without the program) rendering timeline `range` of `project` into `output`.
-pub fn export_args(
-    project: &Project,
-    infos: &MediaInfos,
-    range: Span,
-    output: &Path,
-) -> Vec<String> {
-    todo!()
-}
 
 /// ffmpeg arguments writing the single frame at timeline `time` as PNG to stdout.
 pub fn preview_args(project: &Project, infos: &MediaInfos, time: f64) -> Vec<String> {
     todo!()
-}
-
-impl ExportJob {
-    /// `duration` is the length of the rendered range, used to compute progress.
-    pub fn start(ffmpeg: &Ffmpeg, args: Vec<String>, duration: f64) -> anyhow::Result<Self> {
-        todo!()
-    }
-
-    pub fn status(&self) -> ExportStatus {
-        todo!()
-    }
-
-    pub fn cancel(&mut self) {
-        todo!()
-    }
 }
 
 impl Previewer {
