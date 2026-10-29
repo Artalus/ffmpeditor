@@ -1,6 +1,7 @@
 //! Turns a project into ffmpeg invocations: final export and still preview frames.
 
 mod graph;
+mod process;
 
 use std::collections::HashMap;
 use std::path::Path;
