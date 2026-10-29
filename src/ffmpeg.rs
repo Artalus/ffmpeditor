@@ -45,33 +45,25 @@ impl Ffmpeg {
 }
 
 fn sibling_ffprobe(ffmpeg: &Path) -> PathBuf {
-    let name = match ffmpeg.extension() {
-        Some(ext) => format!("ffprobe.{}", ext.to_string_lossy()),
-        None => "ffprobe".to_owned(),
-    };
-    match ffmpeg.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => dir.join(name),
-        _ => PathBuf::from(name),
+    let mut ffprobe = ffmpeg.with_file_name("ffprobe");
+    if let Some(ext) = ffmpeg.extension() {
+        ffprobe.set_extension(ext);
     }
+    ffprobe
 }
 
 fn command(program: &Path) -> Command {
     let mut cmd = Command::new(program);
     cmd.stdin(Stdio::null());
-    hide_console(&mut cmd);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Without this every spawned ffmpeg flashes a console window in the release (GUI subsystem) build.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd
 }
-
-#[cfg(windows)]
-fn hide_console(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    // Without this every spawned ffmpeg flashes a console window in the release (GUI subsystem) build.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn hide_console(_cmd: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
