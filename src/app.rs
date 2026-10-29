@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use egui::{Context, ViewportCommand};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, config_path};
 use crate::ffmpeg::Ffmpeg;
 use crate::media::MediaCache;
 use crate::model::Project;
@@ -44,6 +44,8 @@ pub struct App {
     dialog: Dialog,
     /// The user already agreed to drop unsaved changes, so the next close request goes through.
     quit_confirmed: bool,
+    /// Config file that failed to load; saving settings would overwrite it.
+    unreadable_config: Option<PathBuf>,
     errors: Vec<String>,
     /// Last title sent to the window, to avoid resending it every frame.
     title: String,
@@ -54,6 +56,8 @@ enum Dialog {
     None,
     Unsaved(Guarded),
     Settings(SettingsDialog),
+    /// Settings accepted while the config file on disk is unreadable.
+    OverwriteConfig(AppConfig, PathBuf),
     ProjectSettings(ProjectSettingsDialog),
     Export(ExportDialog),
 }
@@ -68,10 +72,15 @@ enum Guarded {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let config = AppConfig::load();
+        let mut errors = Vec::new();
+        let mut unreadable_config = None;
+        let config = AppConfig::load().unwrap_or_else(|err| {
+            errors.push(format!("{err:#}; using defaults"));
+            unreadable_config = config_path();
+            AppConfig::default()
+        });
         let ffmpeg = Ffmpeg::new(&config.ffmpeg_path);
         let ffmpeg_status = check_ffmpeg(&ffmpeg);
-        let mut errors = Vec::new();
         if let Err(err) = &ffmpeg_status {
             errors.push(format!(
                 "ffmpeg not usable ({err}); set its location in Options → Settings."
@@ -94,6 +103,7 @@ impl App {
             last_export: None,
             dialog: Dialog::None,
             quit_confirmed: false,
+            unreadable_config,
             errors,
             title: String::new(),
         }
@@ -236,11 +246,25 @@ impl App {
             Dialog::Settings(dialog) => match dialog.show(ctx) {
                 Outcome::Open => {}
                 Outcome::Cancelled => self.dialog = Dialog::None,
-                Outcome::Accepted(config) => {
-                    self.dialog = Dialog::None;
-                    self.apply_config(config);
-                }
+                Outcome::Accepted(config) => match self.unreadable_config.clone() {
+                    Some(path) => self.dialog = Dialog::OverwriteConfig(config, path),
+                    None => {
+                        self.dialog = Dialog::None;
+                        self.apply_config(config);
+                    }
+                },
             },
+            Dialog::OverwriteConfig(config, path) => {
+                match ui::dialogs::confirm_overwrite(ctx, path) {
+                    Outcome::Open => {}
+                    Outcome::Cancelled => self.dialog = Dialog::None,
+                    Outcome::Accepted(()) => {
+                        let config = config.clone();
+                        self.dialog = Dialog::None;
+                        self.apply_config(config);
+                    }
+                }
+            }
             Dialog::ProjectSettings(dialog) => match dialog.show(ctx) {
                 Outcome::Open => {}
                 Outcome::Cancelled => self.dialog = Dialog::None,
@@ -286,8 +310,9 @@ impl App {
     }
 
     fn apply_config(&mut self, config: AppConfig) {
-        if let Err(err) = config.save() {
-            self.report(format!("Saving settings: {err:#}"));
+        match config.save() {
+            Ok(()) => self.unreadable_config = None,
+            Err(err) => self.report(format!("Saving settings: {err:#}")),
         }
         let ffmpeg_changed = config.ffmpeg_path != self.config.ffmpeg_path;
         self.config = config;

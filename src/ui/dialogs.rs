@@ -32,6 +32,13 @@ pub fn unsaved_changes(ctx: &Context, project_name: &str) -> Outcome<UnsavedChoi
     })
 }
 
+pub fn confirm_overwrite(ctx: &Context, path: &Path) -> Outcome<()> {
+    modal(ctx, "Unreadable config", |ui| {
+        ui.label(format!("Overwrite unreadable config {}?", path.display()));
+        confirm_buttons(ui, [("Overwrite", Some(()))])
+    })
+}
+
 /// Non-blocking list of messages, each dismissable.
 pub fn errors(ctx: &Context, errors: &mut Vec<String>) {
     if errors.is_empty() {
