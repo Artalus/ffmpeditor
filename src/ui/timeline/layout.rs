@@ -224,16 +224,12 @@ impl View {
             .map(|l| l.track)
     }
 
-    pub fn visible_time(&self) -> (f64, f64) {
-        (
-            self.axis.time(self.rows.left()),
-            self.axis.time(self.rows.right()),
-        )
-    }
-
     /// Clips on `track` within view, in draw order (later on top).
     pub fn visible_clips<'p>(&self, project: &'p Project, track: Track) -> Vec<&'p Clip> {
-        let (start, end) = self.visible_time();
+        let (start, end) = (
+            self.axis.time(self.rows.left()),
+            self.axis.time(self.rows.right()),
+        );
         let mut clips: Vec<_> = project
             .clips_on(track)
             .filter(|c| c.end() >= start && c.start <= end)
