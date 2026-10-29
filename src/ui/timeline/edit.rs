@@ -13,14 +13,6 @@ pub enum Zone {
     End,
 }
 
-/// A clip's horizontal screen extent within one lane.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClipX {
-    pub id: ClipId,
-    pub x0: f32,
-    pub x1: f32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClipDrag {
     pub clip: ClipId,
@@ -38,17 +30,18 @@ pub struct Snapping {
 
 /// Edges win over bodies so overlapped (crossfaded) clips stay trimmable;
 /// otherwise the last clip in `clips` (drawn on top) wins.
-pub fn hit_clip(clips: &[ClipX], x: f32) -> Option<(ClipId, Zone)> {
+/// `clips` are `(id, x0, x1)`: horizontal screen extents within one lane.
+pub fn hit_clip(clips: &[(ClipId, f32, f32)], x: f32) -> Option<(ClipId, Zone)> {
     let mut edge: Option<(f32, ClipId, Zone)> = None;
     let mut body = None;
-    for clip in clips {
-        let Some((zone, distance)) = zone_at(clip.x0, clip.x1, x) else {
+    for &(id, x0, x1) in clips {
+        let Some((zone, distance)) = zone_at(x0, x1, x) else {
             continue;
         };
         if zone == Zone::Body {
-            body = Some(clip.id);
+            body = Some(id);
         } else if edge.is_none_or(|(best, ..)| distance < best) {
-            edge = Some((distance, clip.id, zone));
+            edge = Some((distance, id, zone));
         }
     }
     edge.map(|(_, id, zone)| (id, zone))
@@ -176,14 +169,6 @@ mod tests {
     use super::*;
     use crate::test_support::project;
 
-    fn clip_x(id: u64, x0: f32, x1: f32) -> ClipX {
-        ClipX {
-            id: ClipId(id),
-            x0,
-            x1,
-        }
-    }
-
     /// V1: [0, 10) and [20, 30); A1: [5, 8).
     fn sample() -> (Project, [ClipId; 3]) {
         project([
@@ -211,7 +196,7 @@ mod tests {
 
     #[test]
     fn edges_beat_overlapping_bodies() {
-        let clips = [clip_x(1, 0.0, 100.0), clip_x(2, 80.0, 200.0)];
+        let clips = [(ClipId(1), 0.0, 100.0), (ClipId(2), 80.0, 200.0)];
         assert_eq!(hit_clip(&clips, 50.0), Some((ClipId(1), Zone::Body)));
         assert_eq!(hit_clip(&clips, 90.0), Some((ClipId(2), Zone::Body)));
         assert_eq!(hit_clip(&clips, 97.0), Some((ClipId(1), Zone::End)));

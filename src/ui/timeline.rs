@@ -5,7 +5,7 @@ mod paint;
 use egui::{CursorIcon, PointerButton, Pos2, Response, Sense, Ui, Vec2};
 
 use self::edit::{
-    ClipDrag, ClipX, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
+    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
 };
 use self::layout::{Areas, TimeAxis, TrackCounts, View, content_height, layout_lanes};
 use crate::media::MediaCache;
@@ -242,11 +242,7 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
     let clips: Vec<_> = view
         .visible_clips(project, lane.track)
         .into_iter()
-        .map(|c| ClipX {
-            id: c.id,
-            x0: view.axis.x(c.start),
-            x1: view.axis.x(c.end()),
-        })
+        .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
     hit_clip(&clips, pos.x)
 }
