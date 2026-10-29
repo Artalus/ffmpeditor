@@ -279,17 +279,10 @@ fn divides(major: f64, minor: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Clip;
-    use crate::model::{ClipId, SourceId};
+    use crate::test_support::project;
 
-    fn project_with(tracks: &[Track]) -> Project {
-        let mut project = Project::default();
-        for (i, &track) in tracks.iter().enumerate() {
-            project
-                .clips
-                .push(Clip::new(ClipId(i as u64), SourceId(1), track, 0.0, 1.0));
-        }
-        project
+    fn counts_of<const N: usize>(tracks: [Track; N]) -> TrackCounts {
+        TrackCounts::of(&project(tracks.map(|track| (track, 0.0, 1.0))).0)
     }
 
     #[test]
@@ -324,9 +317,9 @@ mod tests {
     fn track_counts_cover_used_tracks_only() {
         let empty = TrackCounts::of(&Project::default());
         assert_eq!(empty, TrackCounts { video: 1, audio: 1 });
-        let used = TrackCounts::of(&project_with(&[Track::Video(0), Track::Video(2)]));
+        let used = counts_of([Track::Video(0), Track::Video(2)]);
         assert_eq!(used, TrackCounts { video: 3, audio: 1 });
-        let audio = TrackCounts::of(&project_with(&[Track::Audio(0), Track::Audio(1)]));
+        let audio = counts_of([Track::Audio(0), Track::Audio(1)]);
         assert_eq!(audio, TrackCounts { video: 1, audio: 2 });
     }
 
@@ -402,19 +395,20 @@ mod tests {
 
     #[test]
     fn visible_clips_are_culled_and_ordered() {
-        let mut project = project_with(&[Track::Video(0); 4]);
-        for (clip, start) in project.clips.iter_mut().zip([300.0, 50.0, -600.0, 50.0]) {
-            clip.start = start;
-            clip.duration = 100.0;
-        }
-        project.clips[3].id = ClipId(0);
-        project.clips[0].id = ClipId(3);
-        let ids: Vec<_> = view(TrackCounts { video: 1, audio: 1 })
-            .visible_clips(&project, Track::Video(0))
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert_eq!(ids, [ClipId(0), ClipId(1), ClipId(3)]);
+        let (mut project, [x, y, _, w, _]) = project([
+            (Track::Video(0), 300.0, 100.0),
+            (Track::Video(0), 250.0, 100.0),
+            (Track::Video(0), 0.0, 100.0),
+            (Track::Video(0), 250.0, 100.0),
+            (Track::Video(0), 800.0, 100.0),
+        ]);
+        // Stored against id order, so only the explicit tie-break puts y before w.
+        project.clips.reverse();
+        let mut view = view(TrackCounts { video: 1, audio: 1 });
+        view.axis.scroll = 200.0;
+        let visible = view.visible_clips(&project, Track::Video(0));
+        let ids: Vec<_> = visible.iter().map(|c| c.id).collect();
+        assert_eq!(ids, [y, w, x]);
     }
 
     #[test]
