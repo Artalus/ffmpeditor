@@ -182,12 +182,8 @@ impl App {
             Command::Export => self.open_export_dialog(),
             // Goes through handle_close_request, which owns the unsaved-changes check.
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
-            Command::Undo => {
-                self.history.undo(&mut self.project);
-            }
-            Command::Redo => {
-                self.history.redo(&mut self.project);
-            }
+            Command::Undo => self.history.undo(&mut self.project),
+            Command::Redo => self.history.redo(&mut self.project),
             Command::Split => {
                 self.project
                     .split_at(self.timeline.playhead, self.timeline.selected_clip);
