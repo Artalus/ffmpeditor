@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use egui::{
-    Align, Align2, Context, Id, Key, Label, Layout, Modal, Modifiers, ScrollArea, TextEdit,
-};
+use egui::{Align, Align2, Context, Id, Label, Layout, Modal, ScrollArea, TextEdit};
 
 use crate::config::AppConfig;
 use crate::ffmpeg::Ffmpeg;
@@ -149,11 +147,9 @@ pub fn modal<T>(
         ui.add_space(4.0);
         content(ui)
     });
-    let escape = || ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
     if matches!(response.inner, Outcome::Open)
-        && response.is_top_modal
-        && !response.any_popup_open
-        && escape()
+        && response.should_close()
+        && !response.backdrop_response.clicked()
     {
         return Outcome::Cancelled;
     }
