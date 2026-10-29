@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
-pub const MIN_CLIP_DURATION: f64 = 0.04;
+const MIN_CLIP_DURATION: f64 = 0.04;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -51,9 +51,9 @@ pub struct Clip {
     pub id: ClipId,
     pub source: SourceId,
     pub track: Track,
-    /// Timeline position, seconds.
+    /// Timeline position.
     pub start: f64,
-    /// Offset into the source, seconds.
+    /// Offset into the source.
     pub source_in: f64,
     pub duration: f64,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -108,7 +108,7 @@ impl Project {
     }
 
     pub fn duration(&self) -> f64 {
-        self.clips.iter().map(Clip::end).fold(0.0, f64::max)
+        latest_end(self.clips.iter())
     }
 
     pub fn source(&self, id: SourceId) -> Option<&Source> {
@@ -127,15 +127,15 @@ impl Project {
         self.clips.iter().filter(move |c| c.track == track)
     }
 
-    pub fn track_end(&self, track: Track) -> f64 {
-        self.clips_on(track).map(Clip::end).fold(0.0, f64::max)
+    fn track_end(&self, track: Track) -> f64 {
+        latest_end(self.clips_on(track))
     }
 
     pub fn add_source(&mut self, path: PathBuf) -> SourceId {
         if let Some(existing) = self.sources.iter().find(|s| s.path == path) {
             return existing.id;
         }
-        let id = SourceId(self.sources.iter().map(|s| s.id.0 + 1).max().unwrap_or(1));
+        let id = SourceId(next_id(self.sources.iter().map(|s| s.id.0)));
         self.sources.push(Source { id, path });
         id
     }
@@ -181,7 +181,6 @@ impl Project {
         Some(new_id)
     }
 
-    /// Moves the clip's left edge to timeline time `start`, keeping its right edge in place.
     pub fn trim_clip_start(&mut self, id: ClipId, start: f64) {
         let Some(clip) = self.clip_mut(id) else {
             return;
@@ -194,7 +193,6 @@ impl Project {
         clip.duration = end - start;
     }
 
-    /// Moves the clip's right edge to timeline time `end`, keeping its left edge in place.
     pub fn trim_clip_end(&mut self, id: ClipId, end: f64, source_duration: f64) {
         let Some(clip) = self.clip_mut(id) else {
             return;
@@ -204,31 +202,29 @@ impl Project {
         clip.duration = end - clip.start;
     }
 
-    /// Length of the overlap between the clip's head and an earlier clip on the same track;
-    /// overlaps are rendered as crossfades.
+    /// Overlap of the clip's head with an earlier clip on the same track.
+    /// Overlaps are rendered as crossfades.
     pub fn overlap_before(&self, id: ClipId) -> f64 {
-        let Some(clip) = self.clip(id) else {
-            return 0.0;
-        };
-        self.clips_on(clip.track)
-            .filter(|other| other.id != id && other.starts_before(clip))
-            .map(|other| (other.end().min(clip.end()) - clip.start).max(0.0))
-            .fold(0.0, f64::max)
+        self.overlap(id, true)
     }
 
-    /// Length of the overlap between the clip's tail and a later clip on the same track.
     pub fn overlap_after(&self, id: ClipId) -> f64 {
+        self.overlap(id, false)
+    }
+
+    fn overlap(&self, id: ClipId, head: bool) -> f64 {
         let Some(clip) = self.clip(id) else {
             return 0.0;
         };
         self.clips_on(clip.track)
-            .filter(|other| other.id != id && clip.starts_before(other))
-            .map(|other| (clip.end().min(other.end()) - other.start).max(0.0))
+            .map(|other| if head { (other, clip) } else { (clip, other) })
+            .filter(|(earlier, later)| earlier.starts_before(later))
+            .map(|(earlier, later)| (earlier.end().min(later.end()) - later.start).max(0.0))
             .fold(0.0, f64::max)
     }
 
     fn next_clip_id(&self) -> ClipId {
-        ClipId(self.clips.iter().map(|c| c.id.0 + 1).max().unwrap_or(1))
+        ClipId(next_id(self.clips.iter().map(|c| c.id.0)))
     }
 }
 
@@ -384,6 +380,14 @@ impl TryFrom<String> for Track {
     }
 }
 
+fn latest_end<'a>(clips: impl Iterator<Item = &'a Clip>) -> f64 {
+    clips.map(Clip::end).fold(0.0, f64::max)
+}
+
+fn next_id(ids: impl Iterator<Item = u64>) -> u64 {
+    ids.max().map_or(1, |id| id + 1)
+}
+
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
@@ -402,8 +406,9 @@ mod tests {
     #[test]
     fn toml_roundtrip() {
         let (mut project, clip) = project_with_clip(10.0);
-        project.clip_mut(clip).unwrap().audio.mute_regions = vec![Span::new(1.0, 2.0)];
-        project.clip_mut(clip).unwrap().video.fade_in = 0.5;
+        let c = project.clip_mut(clip).unwrap();
+        c.audio.mute_regions = vec![Span::new(1.0, 2.0)];
+        c.video.fade_in = 0.5;
         let text = toml::to_string_pretty(&project).unwrap();
         assert!(text.contains("track = \"V1\""), "{text}");
         let parsed: Project = toml::from_str(&text).unwrap();
@@ -451,9 +456,10 @@ mod tests {
     #[test]
     fn split_keeps_content_continuous() {
         let (mut project, left) = project_with_clip(10.0);
-        project.clip_mut(left).unwrap().source_in = 2.0;
-        project.clip_mut(left).unwrap().video.fade_in = 1.0;
-        project.clip_mut(left).unwrap().video.fade_out = 1.0;
+        let c = project.clip_mut(left).unwrap();
+        c.source_in = 2.0;
+        c.video.fade_in = 1.0;
+        c.video.fade_out = 1.0;
         let right = project.split_clip(left, 4.0).unwrap();
         let (l, r) = (project.clip(left).unwrap(), project.clip(right).unwrap());
         assert_eq!((l.start, l.duration, l.source_in), (0.0, 4.0, 2.0));
