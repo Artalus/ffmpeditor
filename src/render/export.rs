@@ -7,7 +7,7 @@ use anyhow::Context;
 
 use super::ExportStatus;
 use super::graph::{self, FrameRate, Target};
-use super::process::{self, GraphFile};
+use super::process::{self, GraphFile, MAX_INLINE_COMMAND_LINE};
 use crate::ffmpeg::{self, Ffmpeg};
 use crate::media::MediaInfos;
 use crate::model::{Project, Span};
@@ -78,7 +78,7 @@ pub fn export_args(
 impl ExportJob {
     /// `duration` is the length of the rendered range, used to compute progress.
     pub fn start(ffmpeg: &Ffmpeg, args: Vec<String>, duration: f64) -> anyhow::Result<Self> {
-        let (mut cmd, graph_file) = process::command(ffmpeg, &args)?;
+        let (mut cmd, graph_file) = process::command(ffmpeg, &args, MAX_INLINE_COMMAND_LINE)?;
         let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

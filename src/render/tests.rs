@@ -259,7 +259,7 @@ fn preview_works_with_graph_in_file() {
     let mut tl = Timeline::new(320, 180, 30.0);
     tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
     let args = preview_args(&tl.project, &tl.infos, 0.5);
-    let (mut cmd, _file) = process::command_with_limit(&ffmpeg(), &args, 0).unwrap();
+    let (mut cmd, _file) = process::command(&ffmpeg(), &args, 0).unwrap();
     let output = cmd.output().unwrap();
     assert!(
         output.status.success(),
@@ -488,7 +488,8 @@ fn audio_samples(path: &Path) -> Vec<i16> {
 
 fn render_preview(tl: &Timeline, time: f64) -> image::RgbImage {
     let args = preview_args(&tl.project, &tl.infos, time);
-    let (mut cmd, _file) = process::command(&ffmpeg(), &args).unwrap();
+    let (mut cmd, _file) =
+        process::command(&ffmpeg(), &args, process::MAX_INLINE_COMMAND_LINE).unwrap();
     let output = cmd.output().unwrap();
     assert!(
         output.status.success(),

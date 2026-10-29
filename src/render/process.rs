@@ -9,18 +9,14 @@ use anyhow::Context;
 use crate::ffmpeg::Ffmpeg;
 
 /// Windows caps a command line at 32767 chars; graphs with many clips get there.
-const MAX_INLINE_COMMAND_LINE: usize = 30_000;
+pub const MAX_INLINE_COMMAND_LINE: usize = 30_000;
 
 /// Filter graph moved out of the command line; deleted when dropped, so keep it until ffmpeg exits.
 pub struct GraphFile {
     path: PathBuf,
 }
 
-pub fn command(ffmpeg: &Ffmpeg, args: &[String]) -> anyhow::Result<(Command, Option<GraphFile>)> {
-    command_with_limit(ffmpeg, args, MAX_INLINE_COMMAND_LINE)
-}
-
-pub fn command_with_limit(
+pub fn command(
     ffmpeg: &Ffmpeg,
     args: &[String],
     limit: usize,
@@ -81,7 +77,7 @@ mod tests {
     fn long_command_line_moves_graph_to_file() {
         let ffmpeg = Ffmpeg::new(Path::new("ffmpeg"));
         let args = ["-filter_complex", "graph", "-y", "out.mp4"].map(String::from);
-        let (cmd, file) = command_with_limit(&ffmpeg, &args, 0).unwrap();
+        let (cmd, file) = command(&ffmpeg, &args, 0).unwrap();
         let cmd_args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         let i = cmd_args
             .iter()
@@ -91,7 +87,7 @@ mod tests {
         drop(file);
         assert!(!Path::new(cmd_args[i + 1]).exists());
 
-        let (cmd, file) = command(&ffmpeg, &args).unwrap();
+        let (cmd, file) = command(&ffmpeg, &args, MAX_INLINE_COMMAND_LINE).unwrap();
         assert!(file.is_none());
         assert!(cmd.get_args().any(|a| a == "-filter_complex"));
     }

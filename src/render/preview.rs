@@ -6,7 +6,7 @@ use std::thread;
 use anyhow::Context;
 
 use super::graph::{self, FrameRate, Target};
-use super::process;
+use super::process::{self, MAX_INLINE_COMMAND_LINE};
 use crate::ffmpeg::{Ffmpeg, Slot};
 use crate::media::MediaInfos;
 use crate::model::{Project, Span};
@@ -163,7 +163,8 @@ fn render_loop(
 }
 
 fn render(shared: &Shared, request: &Request) -> anyhow::Result<egui::ColorImage> {
-    let (cmd, _graph_file) = process::command(&request.ffmpeg, &request.args)?;
+    let (cmd, _graph_file) =
+        process::command(&request.ffmpeg, &request.args, MAX_INLINE_COMMAND_LINE)?;
     let png = shared.running.run(
         || !shared.state.lock().unwrap().closed,
         cmd,
