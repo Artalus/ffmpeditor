@@ -6,9 +6,7 @@ use egui::{
 };
 
 use super::TimelineState;
-use super::layout::{
-    Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height, crossfades, format_time,
-};
+use super::layout::{Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height, format_time};
 use crate::media::MediaCache;
 use crate::model::{Clip, Project};
 
@@ -64,7 +62,7 @@ fn lanes(painter: &Painter, scene: &Scene) {
         for clip in &clips {
             clip_in_lane(painter, scene, lane, rect, clip);
         }
-        for overlap in crossfades(&clips) {
+        for overlap in scene.project.crossfades(lane.track) {
             let axis = &scene.view.axis;
             cross_mark(painter, axis.x(overlap.start), axis.x(overlap.end), rect);
         }

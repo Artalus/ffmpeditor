@@ -2,7 +2,7 @@
 
 use egui::{Pos2, Rect, pos2};
 
-use crate::model::{Clip, Project, Span, Track};
+use crate::model::{Clip, Project, Track};
 
 pub const HEADER_WIDTH: f32 = 70.0;
 pub const RULER_HEIGHT: f32 = 24.0;
@@ -243,20 +243,6 @@ impl View {
     }
 }
 
-/// Overlapping parts of `clips` sorted by start; rendered as crossfades.
-pub fn crossfades(clips: &[&Clip]) -> Vec<Span> {
-    let mut spans = Vec::new();
-    for (i, a) in clips.iter().enumerate() {
-        for b in clips[i + 1..].iter().take_while(|b| b.start < a.end()) {
-            let span = Span::new(b.start, a.end().min(b.end()));
-            if !span.is_empty() {
-                spans.push(span);
-            }
-        }
-    }
-    spans
-}
-
 impl Ticks {
     pub fn for_zoom(pixels_per_second: f32) -> Self {
         let px = |step: f64| step * pixels_per_second as f64;
@@ -448,25 +434,6 @@ mod tests {
             .map(|c| c.id)
             .collect();
         assert_eq!(ids, [ClipId(0), ClipId(1), ClipId(3)]);
-    }
-
-    #[test]
-    fn crossfades_between_overlapping_clips() {
-        let mut project = project_with(&[Track::Video(0); 3]);
-        for (clip, (start, duration)) in
-            project
-                .clips
-                .iter_mut()
-                .zip([(0.0, 10.0), (8.0, 1.0), (9.5, 5.0)])
-        {
-            clip.start = start;
-            clip.duration = duration;
-        }
-        let clips: Vec<_> = project.clips.iter().collect();
-        assert_eq!(
-            crossfades(&clips),
-            [Span::new(8.0, 9.0), Span::new(9.5, 10.0)]
-        );
     }
 
     #[test]

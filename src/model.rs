@@ -232,14 +232,25 @@ impl Project {
         self.overlap(id, false)
     }
 
+    /// Every overlap on `track`, for the timeline to mark.
+    pub fn crossfades(&self, track: Track) -> impl Iterator<Item = Span> {
+        self.clips_on(track)
+            .flat_map(move |a| self.clips_on(track).filter_map(move |b| a.overlap_with(b)))
+    }
+
     fn overlap(&self, id: ClipId, head: bool) -> f64 {
         let Some(clip) = self.clip(id) else {
             return 0.0;
         };
         self.clips_on(clip.track)
-            .map(|other| if head { (other, clip) } else { (clip, other) })
-            .filter(|(earlier, later)| earlier.starts_before(later))
-            .map(|(earlier, later)| (earlier.end().min(later.end()) - later.start).max(0.0))
+            .filter_map(|other| {
+                if head {
+                    other.overlap_with(clip)
+                } else {
+                    clip.overlap_with(other)
+                }
+            })
+            .map(|span| span.len())
             .fold(0.0, f64::max)
     }
 
@@ -300,8 +311,13 @@ impl Clip {
         t - self.source_in + self.start
     }
 
-    fn starts_before(&self, other: &Clip) -> bool {
-        (self.start, self.id) < (other.start, other.id)
+    /// Part of `self` covered by `later`, a clip on the same track that starts after it.
+    fn overlap_with(&self, later: &Clip) -> Option<Span> {
+        if (self.start, self.id) < (later.start, later.id) {
+            self.span().intersect(later.span())
+        } else {
+            None
+        }
     }
 }
 
@@ -557,6 +573,18 @@ mod tests {
         assert_eq!(project.overlap_before(first), 0.0);
         assert_eq!(project.overlap_after(second), 0.0);
         assert_eq!(project.overlap_before(other_track), 0.0);
+    }
+
+    #[test]
+    fn crossfades_cover_each_overlap_on_the_track() {
+        let (project, _) = project([
+            (Track::Video(0), 0.0, 10.0),
+            (Track::Video(0), 8.0, 1.0),
+            (Track::Video(0), 9.5, 5.0),
+            (Track::Video(1), 0.0, 20.0),
+        ]);
+        let spans: Vec<_> = project.crossfades(Track::Video(0)).collect();
+        assert_eq!(spans, [Span::new(8.0, 9.0), Span::new(9.5, 10.0)]);
     }
 
     /// Splits `V1: 0..10, 10..20` and `V2: 5..15` (clips 1, 2, 3); returns the ids it cut.
