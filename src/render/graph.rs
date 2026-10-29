@@ -44,6 +44,16 @@ struct Layer<'a> {
     overlap_after: f64,
 }
 
+impl Graph {
+    /// ffmpeg arguments up to and including the video output mapping.
+    pub fn into_args(self, loglevel: &str) -> Vec<String> {
+        let mut args = vec!["-loglevel".into(), loglevel.into()];
+        args.extend(self.inputs);
+        args.extend(["-filter_complex", &self.filter, "-map", "[v]"].map(String::from));
+        args
+    }
+}
+
 pub fn build(project: &Project, infos: &MediaInfos, target: &Target) -> Graph {
     let rate = FrameRate::from_fps(project.settings.fps);
     let range = rate.snap(target.range);

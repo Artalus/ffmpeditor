@@ -66,24 +66,8 @@ pub fn preview_args(project: &Project, infos: &MediaInfos, time: f64) -> Vec<Str
             input_lookahead: 1.0,
         },
     );
-    let mut args = vec!["-loglevel".into(), "error".into()];
-    args.extend(graph.inputs);
-    args.extend(
-        [
-            "-filter_complex",
-            &graph.filter,
-            "-map",
-            "[v]",
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-c:v",
-            "png",
-            "-",
-        ]
-        .map(String::from),
-    );
+    let mut args = graph.into_args("error");
+    args.extend(["-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"].map(String::from));
     args
 }
 

@@ -45,13 +45,8 @@ pub fn export_args(
             input_lookahead: 0.0,
         },
     );
-    let mut args = vec!["-loglevel".into(), "warning".into()];
-    args.extend(graph.inputs);
+    let mut args = graph.into_args("warning");
     args.extend([
-        "-filter_complex".into(),
-        graph.filter,
-        "-map".into(),
-        "[v]".into(),
         "-map".into(),
         "[a]".into(),
         "-c:v".into(),
