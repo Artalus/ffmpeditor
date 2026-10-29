@@ -188,7 +188,7 @@ impl Project {
         };
         let end = clip.end();
         let earliest = (clip.start - clip.source_in).max(0.0);
-        let start = start.clamp(earliest, end - MIN_CLIP_DURATION);
+        let start = start.min(end - MIN_CLIP_DURATION).max(earliest);
         clip.source_in += start - clip.start;
         clip.start = start;
         clip.duration = end - start;
@@ -200,7 +200,7 @@ impl Project {
             return;
         };
         let latest = clip.start + (source_duration - clip.source_in);
-        let end = end.clamp(clip.start + MIN_CLIP_DURATION, latest);
+        let end = end.min(latest).max(clip.start + MIN_CLIP_DURATION);
         clip.duration = end - clip.start;
     }
 
@@ -491,6 +491,22 @@ mod tests {
         project.trim_clip_end(clip, 20.0, 10.0);
         assert_eq!(project.clip(clip).unwrap().duration, 10.0);
         project.trim_clip_end(clip, -1.0, 10.0);
+        assert_eq!(project.clip(clip).unwrap().duration, MIN_CLIP_DURATION);
+    }
+
+    #[test]
+    fn trim_keeps_degenerate_clips_valid() {
+        let (mut project, clip) = project_with_clip(0.01);
+        project.trim_clip_start(clip, 5.0);
+        let c = project.clip(clip).unwrap();
+        assert_eq!((c.start, c.source_in, c.duration), (0.0, 0.0, 0.01));
+        project.trim_clip_end(clip, 5.0, 0.0);
+        assert_eq!(project.clip(clip).unwrap().duration, MIN_CLIP_DURATION);
+
+        // The source got shorter than the clip's `source_in`.
+        let (mut project, clip) = project_with_clip(2.0);
+        project.clip_mut(clip).unwrap().source_in = 5.0;
+        project.trim_clip_end(clip, 1.0, 3.0);
         assert_eq!(project.clip(clip).unwrap().duration, MIN_CLIP_DURATION);
     }
 
