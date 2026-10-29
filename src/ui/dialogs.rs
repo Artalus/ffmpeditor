@@ -58,7 +58,7 @@ pub fn errors(ctx: &Context, errors: &mut Vec<String>) {
     let mut dismissed = None;
     let mut dismiss_all = false;
     egui::Window::new("Errors")
-        .anchor(Align2::RIGHT_BOTTOM, [-8.0, -32.0])
+        .anchor(Align2::RIGHT_TOP, [-8.0, 32.0])
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {

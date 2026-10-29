@@ -40,7 +40,8 @@ pub fn show(ui: &mut egui::Ui, previewer: &Previewer, placeholder: &str) {
         child.label(RichText::new(error).color(ERROR_COLOR));
     }
     if previewer.is_busy() {
-        let spinner = Rect::from_min_size(rect.right_top() + vec2(-28.0, 8.0), vec2(20.0, 20.0));
+        // Bottom right: the top right is where error messages pop up.
+        let spinner = Rect::from_min_size(rect.right_bottom() - vec2(28.0, 28.0), vec2(20.0, 20.0));
         egui::Spinner::new()
             .size(20.0)
             .color(Color32::LIGHT_GRAY)
