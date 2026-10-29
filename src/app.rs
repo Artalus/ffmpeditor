@@ -169,9 +169,6 @@ impl App {
     }
 
     fn run(&mut self, command: Command, ctx: &Context) {
-        let playhead = &mut self.timeline.playhead;
-        let duration = self.project.duration();
-        let fps = self.project.settings.fps;
         match command {
             Command::New => self.guard(Guarded::New, ctx),
             Command::Open => self.guard(Guarded::Open, ctx),
@@ -196,10 +193,16 @@ impl App {
                     .split_at(self.timeline.playhead, self.timeline.selected_clip);
             }
             Command::DeleteClip => self.delete_selected_clip(),
-            Command::GoToStart => *playhead = 0.0,
-            Command::GoToEnd => *playhead = duration,
-            Command::PreviousFrame => *playhead = step_frames(*playhead, fps, -1, duration),
-            Command::NextFrame => *playhead = step_frames(*playhead, fps, 1, duration),
+            Command::GoToStart => self.timeline.playhead = 0.0,
+            Command::GoToEnd => self.timeline.playhead = self.project.duration(),
+            Command::PreviousFrame => {
+                let at = &mut self.timeline.playhead;
+                *at = step_frames(*at, self.project.settings.fps, -1, self.project.duration());
+            }
+            Command::NextFrame => {
+                let at = &mut self.timeline.playhead;
+                *at = step_frames(*at, self.project.settings.fps, 1, self.project.duration());
+            }
             Command::ProjectSettings => {
                 let dialog = ProjectSettingsDialog::new(&self.project.settings);
                 self.dialog = Dialog::ProjectSettings(dialog);
