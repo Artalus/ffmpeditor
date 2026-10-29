@@ -19,7 +19,7 @@ use crate::ui::export::ExportDialog;
 use crate::ui::project_settings::ProjectSettingsDialog;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
-use editing::{split_targets, step_frames};
+use editing::step_frames;
 use export::{RunningExport, start_export};
 use history::History;
 
@@ -190,7 +190,10 @@ impl App {
             Command::Redo => {
                 self.history.redo(&mut self.project);
             }
-            Command::Split => self.split_at_playhead(),
+            Command::Split => {
+                self.project
+                    .split_at(self.timeline.playhead, self.timeline.selected_clip);
+            }
             Command::DeleteClip => self.delete_selected_clip(),
             Command::GoToStart => *playhead = 0.0,
             Command::GoToEnd => *playhead = duration,
@@ -220,13 +223,6 @@ impl App {
                 self.quit_confirmed = true;
                 ctx.send_viewport_cmd(ViewportCommand::Close);
             }
-        }
-    }
-
-    fn split_at_playhead(&mut self) {
-        let at = self.timeline.playhead;
-        for id in split_targets(&self.project, self.timeline.selected_clip, at) {
-            self.project.split_clip(id, at);
         }
     }
 

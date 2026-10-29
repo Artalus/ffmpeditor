@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::ffmpeg::Ffmpeg;
 use crate::media::{MediaInfo, VideoInfo};
+use crate::model::{ClipId, Project, Track};
 
 const H264_AAC: &[&str] = &[
     "-c:v",
@@ -60,6 +61,18 @@ pub fn media_info(video: bool, audio: bool) -> MediaInfo {
         }),
         has_audio: audio,
     }
+}
+
+/// One source and a clip per `(track, start, duration)`; clips get ids 1, 2, ... in order.
+pub fn project<const N: usize>(clips: [(Track, f64, f64); N]) -> (Project, [ClipId; N]) {
+    let mut project = Project::default();
+    let source = project.add_source("a.mp4".into());
+    let ids = clips.map(|(track, start, duration)| {
+        let id = project.append_clip(source, track, duration);
+        project.move_clip(id, start, track);
+        id
+    });
+    (project, ids)
 }
 
 /// Polls `cond` until it holds; fails the test after `timeout_secs`.

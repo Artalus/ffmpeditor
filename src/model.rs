@@ -185,6 +185,22 @@ impl Project {
         Some(new_id)
     }
 
+    /// Splits the preferred clip if it spans `at`, otherwise every clip under `at`;
+    /// returns the clips that were split.
+    pub fn split_at(&mut self, at: f64, prefer: Option<ClipId>) -> Vec<ClipId> {
+        let mut targets: Vec<_> = self
+            .clips
+            .iter()
+            .filter(|clip| clip.start < at && at < clip.end())
+            .map(|clip| clip.id)
+            .collect();
+        if let Some(id) = prefer.filter(|id| targets.contains(id)) {
+            targets = vec![id];
+        }
+        targets.retain(|&id| self.split_clip(id, at).is_some());
+        targets
+    }
+
     pub fn trim_clip_start(&mut self, id: ClipId, start: f64) {
         let Some(clip) = self.clip_mut(id) else {
             return;
@@ -399,6 +415,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::project;
 
     fn project_with_clip(duration: f64) -> (Project, ClipId) {
         let mut project = Project::default();
@@ -540,6 +557,37 @@ mod tests {
         assert_eq!(project.overlap_before(first), 0.0);
         assert_eq!(project.overlap_after(second), 0.0);
         assert_eq!(project.overlap_before(other_track), 0.0);
+    }
+
+    /// Splits `V1: 0..10, 10..20` and `V2: 5..15` (clips 1, 2, 3); returns the ids it cut.
+    fn split_ids(at: f64, prefer: Option<u64>) -> Vec<u64> {
+        let (mut project, _) = project([
+            (Track::Video(0), 0.0, 10.0),
+            (Track::Video(0), 10.0, 10.0),
+            (Track::Video(1), 5.0, 10.0),
+        ]);
+        let cut = project.split_at(at, prefer.map(ClipId));
+        cut.iter().map(|id| id.0).collect()
+    }
+
+    #[test]
+    fn split_at_prefers_the_selected_clip_under_the_cut() {
+        assert_eq!(split_ids(7.0, Some(3)), [3]);
+        assert_eq!(split_ids(7.0, Some(1)), [1]);
+    }
+
+    #[test]
+    fn split_at_without_usable_selection_cuts_all_clips_under_it() {
+        assert_eq!(split_ids(7.0, None), [1, 3]);
+        assert_eq!(split_ids(7.0, Some(2)), [1, 3]);
+        assert_eq!(split_ids(12.0, Some(99)), [2, 3]);
+    }
+
+    #[test]
+    fn split_at_clip_edges_cuts_nothing_there() {
+        assert_eq!(split_ids(10.0, None), [3]);
+        assert!(split_ids(0.0, None).is_empty());
+        assert!(split_ids(20.0, None).is_empty());
     }
 
     #[test]
