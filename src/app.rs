@@ -226,61 +226,6 @@ impl App {
         }
     }
 
-    fn status_bar(&self, ui: &mut egui::Ui) {
-        let status = ui::status_bar::Status {
-            playhead: self.timeline.playhead,
-            duration: self.project.duration(),
-            selection: self.timeline.selection,
-            ffmpeg: &self.ffmpeg_status,
-            export_progress: self.export_fraction(),
-        };
-        egui::Panel::bottom("status").show(ui, |ui| ui::status_bar::show(ui, &status));
-    }
-
-    fn timeline_panel(&mut self, ui: &mut egui::Ui) -> TimelineResponse {
-        let default_height = ui.ctx().content_rect().height() * 0.45;
-        egui::Panel::bottom("timeline")
-            .resizable(true)
-            .default_size(default_height)
-            .min_size(120.0)
-            .show(ui, |ui| {
-                ui::timeline::show(ui, &mut self.timeline, &mut self.project, &self.media)
-            })
-            .inner
-    }
-
-    fn viewer(&self, ui: &mut egui::Ui) {
-        let placeholder = if self.project.clips.is_empty() {
-            "Import media to start: File → Import media…"
-        } else {
-            "No preview"
-        };
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| ui::viewer::show(ui, &self.previewer, placeholder));
-    }
-
-    /// Turns finished edits into undo steps and keeps the preview at the playhead.
-    fn settle(&mut self, timeline: &TimelineResponse) {
-        if !timeline.interacting {
-            self.history.commit(&self.project);
-        }
-        if let Some(id) = self.timeline.selected_clip
-            && self.project.clip(id).is_none()
-        {
-            self.timeline.selected_clip = None;
-        }
-        // Scrubbing leaves the project untouched, so its frames are worth rendering mid-drag.
-        if !timeline.interacting || timeline.playhead_moved {
-            self.previewer.request(
-                &self.ffmpeg,
-                &self.project,
-                self.media.infos(),
-                self.timeline.playhead,
-            );
-        }
-    }
-
     fn dialogs(&mut self, ctx: &Context) {
         match &mut self.dialog {
             Dialog::None => {}
@@ -354,6 +299,61 @@ impl App {
         // Sources that failed to probe with a missing ffmpeg may work now.
         if ffmpeg_changed {
             self.probe_sources();
+        }
+    }
+
+    fn status_bar(&self, ui: &mut egui::Ui) {
+        let status = ui::status_bar::Status {
+            playhead: self.timeline.playhead,
+            duration: self.project.duration(),
+            selection: self.timeline.selection,
+            ffmpeg: &self.ffmpeg_status,
+            export_progress: self.export_fraction(),
+        };
+        egui::Panel::bottom("status").show(ui, |ui| ui::status_bar::show(ui, &status));
+    }
+
+    fn timeline_panel(&mut self, ui: &mut egui::Ui) -> TimelineResponse {
+        let default_height = ui.ctx().content_rect().height() * 0.45;
+        egui::Panel::bottom("timeline")
+            .resizable(true)
+            .default_size(default_height)
+            .min_size(120.0)
+            .show(ui, |ui| {
+                ui::timeline::show(ui, &mut self.timeline, &mut self.project, &self.media)
+            })
+            .inner
+    }
+
+    fn viewer(&self, ui: &mut egui::Ui) {
+        let placeholder = if self.project.clips.is_empty() {
+            "Import media to start: File → Import media…"
+        } else {
+            "No preview"
+        };
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| ui::viewer::show(ui, &self.previewer, placeholder));
+    }
+
+    /// Turns finished edits into undo steps and keeps the preview at the playhead.
+    fn settle(&mut self, timeline: &TimelineResponse) {
+        if !timeline.interacting {
+            self.history.commit(&self.project);
+        }
+        if let Some(id) = self.timeline.selected_clip
+            && self.project.clip(id).is_none()
+        {
+            self.timeline.selected_clip = None;
+        }
+        // Scrubbing leaves the project untouched, so its frames are worth rendering mid-drag.
+        if !timeline.interacting || timeline.playhead_moved {
+            self.previewer.request(
+                &self.ffmpeg,
+                &self.project,
+                self.media.infos(),
+                self.timeline.playhead,
+            );
         }
     }
 
