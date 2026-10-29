@@ -4,6 +4,11 @@ use egui::{Context, Key, KeyboardShortcut, Modifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command {
+    New,
+    Open,
+    Save,
+    SaveAs,
+    Import,
     Quit,
     Undo,
     Redo,
@@ -24,6 +29,11 @@ pub struct MenuState {
 
 /// The first shortcut of a command is the one shown in menus.
 const BINDINGS: &[(Command, &[KeyboardShortcut])] = &[
+    (Command::New, &[ctrl(Key::N)]),
+    (Command::Open, &[ctrl(Key::O)]),
+    (Command::Save, &[ctrl(Key::S)]),
+    (Command::SaveAs, &[ctrl_shift(Key::S)]),
+    (Command::Import, &[ctrl(Key::I)]),
     (Command::Undo, &[ctrl(Key::Z)]),
     (Command::Redo, &[ctrl(Key::Y), ctrl_shift(Key::Z)]),
     (Command::Split, &[plain(Key::S)]),
@@ -53,6 +63,13 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
     egui::Panel::top("menu").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
+                item(ui, &mut command, Command::New, true);
+                item(ui, &mut command, Command::Open, true);
+                item(ui, &mut command, Command::Save, true);
+                item(ui, &mut command, Command::SaveAs, true);
+                ui.separator();
+                item(ui, &mut command, Command::Import, true);
+                ui.separator();
                 item(ui, &mut command, Command::Quit, true);
             });
             ui.menu_button("Edit", |ui| {
@@ -120,6 +137,11 @@ const fn ctrl_shift(key: Key) -> KeyboardShortcut {
 impl Command {
     fn label(self) -> &'static str {
         match self {
+            Command::New => "New",
+            Command::Open => "Open…",
+            Command::Save => "Save",
+            Command::SaveAs => "Save as…",
+            Command::Import => "Import media…",
             Command::Quit => "Quit",
             Command::Undo => "Undo",
             Command::Redo => "Redo",
@@ -147,6 +169,8 @@ mod tests {
     #[test]
     fn specific_shortcuts_match_first() {
         assert!(position(ctrl_shift(Key::Z)) < position(ctrl(Key::Z)));
+        assert!(position(ctrl_shift(Key::S)) < position(ctrl(Key::S)));
+        assert!(position(ctrl(Key::S)) < position(plain(Key::S)));
     }
 
     #[test]

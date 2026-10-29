@@ -1,5 +1,6 @@
 mod commands;
 mod editing;
+mod files;
 mod history;
 
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use crate::media::MediaCache;
 use crate::model::Project;
 use crate::render::Previewer;
 use crate::ui;
+use crate::ui::dialogs::UnsavedChoice;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
 use editing::{split_targets, step_frames};
@@ -29,10 +31,29 @@ pub struct App {
     history: History,
     media: MediaCache,
     previewer: Previewer,
+    /// The timeline was mid-gesture last frame; shortcuts would act on a half-finished edit.
+    timeline_busy: bool,
     timeline: TimelineState,
+    dialog: Dialog,
+    /// The user already agreed to drop unsaved changes, so the next close request goes through.
+    quit_confirmed: bool,
     errors: Vec<String>,
     /// Last title sent to the window, to avoid resending it every frame.
     title: String,
+}
+
+/// At most one modal dialog is open at a time.
+enum Dialog {
+    None,
+    Unsaved(Guarded),
+}
+
+/// Actions that would drop unsaved changes.
+#[derive(Clone, Copy)]
+enum Guarded {
+    New,
+    Open,
+    Quit,
 }
 
 impl App {
@@ -57,7 +78,10 @@ impl App {
             config,
             ffmpeg,
             ffmpeg_status,
+            timeline_busy: false,
             timeline: TimelineState::default(),
+            dialog: Dialog::None,
+            quit_confirmed: false,
             errors,
             title: String::new(),
         }
@@ -68,24 +92,41 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.media.poll();
         self.previewer.poll();
+        self.handle_close_request(ui.ctx());
         for command in self.commands(ui) {
             self.run(command, ui.ctx());
         }
         self.status_bar(ui);
         let timeline = self.timeline_panel(ui);
+        self.timeline_busy = timeline.interacting;
         self.viewer(ui);
         self.settle(&timeline);
+        self.dialogs(ui.ctx());
         ui::dialogs::errors(ui.ctx(), &mut self.errors);
         self.update_title(ui.ctx());
     }
 }
 
 impl App {
+    fn handle_close_request(&mut self, ctx: &Context) {
+        if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        if self.quit_confirmed || !self.is_dirty() {
+            return;
+        }
+        ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+        self.dialog = Dialog::Unsaved(Guarded::Quit);
+    }
+
     fn commands(&self, ui: &mut egui::Ui) -> Vec<Command> {
-        let mut commands = if ui.ctx().text_edit_focused() {
-            Vec::new()
-        } else {
+        let shortcuts_allowed = matches!(self.dialog, Dialog::None)
+            && !self.timeline_busy
+            && !ui.ctx().text_edit_focused();
+        let mut commands = if shortcuts_allowed {
             commands::read_shortcuts(ui.ctx())
+        } else {
+            Vec::new()
         };
         let state = MenuState {
             can_undo: self.history.can_undo(),
@@ -101,6 +142,16 @@ impl App {
         let duration = self.project.duration();
         let fps = self.project.settings.fps;
         match command {
+            Command::New => self.guard(Guarded::New, ctx),
+            Command::Open => self.guard(Guarded::Open, ctx),
+            Command::Save => {
+                self.save();
+            }
+            Command::SaveAs => {
+                self.save_as();
+            }
+            Command::Import => self.import(),
+            // Goes through handle_close_request, which owns the unsaved-changes check.
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
             Command::Undo => {
                 self.history.undo(&mut self.project);
@@ -114,6 +165,25 @@ impl App {
             Command::GoToEnd => *playhead = duration,
             Command::PreviousFrame => *playhead = step_frames(*playhead, fps, -1, duration),
             Command::NextFrame => *playhead = step_frames(*playhead, fps, 1, duration),
+        }
+    }
+
+    fn guard(&mut self, action: Guarded, ctx: &Context) {
+        if self.is_dirty() {
+            self.dialog = Dialog::Unsaved(action);
+        } else {
+            self.perform(action, ctx);
+        }
+    }
+
+    fn perform(&mut self, action: Guarded, ctx: &Context) {
+        match action {
+            Guarded::New => self.new_project(),
+            Guarded::Open => self.open(),
+            Guarded::Quit => {
+                self.quit_confirmed = true;
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
         }
     }
 
@@ -185,6 +255,32 @@ impl App {
         }
     }
 
+    fn dialogs(&mut self, ctx: &Context) {
+        match &mut self.dialog {
+            Dialog::None => {}
+            Dialog::Unsaved(action) => {
+                let action = *action;
+                self.unsaved_changes(ctx, action);
+            }
+        }
+    }
+
+    fn unsaved_changes(&mut self, ctx: &Context, action: Guarded) {
+        let name = display_name(self.project_path.as_deref());
+        let Some(choice) = ui::dialogs::unsaved_changes(ctx, &name) else {
+            return;
+        };
+        self.dialog = Dialog::None;
+        let proceed = match choice {
+            UnsavedChoice::Save => self.save(),
+            UnsavedChoice::Discard => true,
+            UnsavedChoice::Cancel => false,
+        };
+        if proceed {
+            self.perform(action, ctx);
+        }
+    }
+
     fn update_title(&mut self, ctx: &Context) {
         let title = window_title(self.project_path.as_deref(), self.is_dirty());
         if title != self.title {
@@ -195,6 +291,12 @@ impl App {
 
     fn is_dirty(&self) -> bool {
         self.project != self.saved
+    }
+
+    fn report(&mut self, message: String) {
+        if !self.errors.contains(&message) {
+            self.errors.push(message);
+        }
     }
 }
 
