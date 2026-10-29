@@ -17,6 +17,15 @@ struct Timeline {
 struct Fixtures {
     testsrc: PathBuf,
     red_16x9: PathBuf,
+    blue_4x3: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Color {
+    Red,
+    Blue,
+    Black,
+    Other([u8; 3]),
 }
 
 #[test]
@@ -75,6 +84,35 @@ fn faststart_only_for_quicktime_containers() {
     };
     assert!(args("a.MOV").contains(&"+faststart".to_owned()));
     assert!(!args("a.mkv").contains(&"+faststart".to_owned()));
+}
+
+#[test]
+fn preview_renders_one_downscaled_frame_containing_time() {
+    let tl = Timeline::new(1920, 1080, 30.0);
+    let args = preview_args(&tl.project, &tl.infos, 1.05);
+    let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+    assert!(
+        graph.starts_with(
+            "color=c=black:s=960x540:r=30,trim=end_frame=1,setpts=PTS+round(1.033333/TB)[base];"
+        ),
+        "{graph}"
+    );
+    assert!(
+        args.ends_with(
+            &["-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"].map(String::from)
+        )
+    );
+}
+
+#[test]
+fn preview_inputs_read_past_the_frame() {
+    let mut tl = Timeline::new(640, 360, 30.0);
+    tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
+    let args = preview_args(&tl.project, &tl.infos, 2.0);
+    assert_eq!(
+        args[2..8],
+        ["-ss", "2.000000", "-t", "1.033333", "-i", "a.mp4"]
+    );
 }
 
 #[test]
@@ -191,6 +229,91 @@ fn export_can_be_cancelled() {
     }
 }
 
+#[test]
+fn preview_composites_tracks_and_cuts() {
+    let fx = fixtures();
+    let mut tl = Timeline::new(320, 180, 30.0);
+    tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.01);
+    // First source frame after the seek lands mid-slot; the slot must still show it, not black.
+    let blue = tl.source_clip(&fx.blue_4x3, Track::Video(0), 1.01, 1.0);
+    tl.edit(blue).source_in = 0.02;
+    tl.source_clip(&fx.blue_4x3, Track::Video(1), 3.0, 1.0);
+    tl.source_clip(&fx.red_16x9, Track::Video(0), 2.5, 2.0);
+    let pixel = |time: f64, x: u32| {
+        let image = render_preview(&tl, time);
+        assert_eq!(image.dimensions(), (320, 180));
+        classify(image.get_pixel(x, 90).0)
+    };
+    assert_eq!(pixel(0.0, 160), Color::Red);
+    assert_eq!(pixel(29.0 / 30.0, 160), Color::Red);
+    assert_eq!(pixel(1.0, 160), Color::Blue);
+    assert_eq!(pixel(2.2, 160), Color::Black);
+    assert_eq!(pixel(3.5, 160), Color::Blue);
+    // 4:3 source on 16:9 canvas: its pillarbox is transparent, the track below shows through.
+    assert_eq!(pixel(3.5, 5), Color::Red);
+    assert_eq!(pixel(1.5, 5), Color::Black);
+}
+
+#[test]
+fn preview_works_with_graph_in_file() {
+    let fx = fixtures();
+    let mut tl = Timeline::new(320, 180, 30.0);
+    tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
+    let args = preview_args(&tl.project, &tl.infos, 0.5);
+    let (mut cmd, _file) = process::command_with_limit(&ffmpeg(), &args, 0).unwrap();
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let image = image::load_from_memory(&output.stdout).unwrap().into_rgb8();
+    assert_eq!(classify(image.get_pixel(160, 90).0), Color::Red);
+}
+
+#[test]
+fn previewer_delivers_texture_and_skips_repeated_requests() {
+    let fx = fixtures();
+    let mut tl = Timeline::new(1280, 720, 30.0);
+    tl.source_clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
+    let ffmpeg = ffmpeg();
+    let mut previewer = Previewer::new(egui::Context::default());
+    previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while previewer.texture().is_none() && previewer.error().is_none() && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+        previewer.poll();
+    }
+    assert_eq!(previewer.error(), None);
+    assert_eq!(previewer.texture().unwrap().size(), [960, 540]);
+    while previewer.is_busy() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
+    assert!(!previewer.is_busy());
+}
+
+#[test]
+fn previewer_reports_errors() {
+    let mut tl = Timeline::new(320, 180, 30.0);
+    tl.clip("definitely-missing.mp4", Track::Video(0), 0.0, 1.0);
+    let mut previewer = Previewer::new(egui::Context::default());
+    previewer.request(&ffmpeg(), &tl.project, &tl.infos, 0.5);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while previewer.error().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        previewer.poll();
+    }
+    assert!(
+        previewer
+            .error()
+            .unwrap()
+            .contains("definitely-missing.mp4")
+    );
+    assert!(previewer.texture().is_none());
+}
+
 impl Timeline {
     fn new(width: u32, height: u32, fps: f64) -> Self {
         let mut project = Project::default();
@@ -247,6 +370,11 @@ fn fixtures() -> &'static Fixtures {
             "red-16x9.mp4",
             "color=c=red:size=320x180:rate=30:duration=3",
             "sine=frequency=440:duration=3",
+        ),
+        blue_4x3: fixture(
+            "blue-4x3.mp4",
+            "color=c=blue:size=320x240:rate=30:duration=3",
+            "sine=frequency=880:duration=3",
         ),
     })
 }
@@ -373,4 +501,25 @@ fn audio_samples(path: &Path) -> Vec<i16> {
     );
     let (samples, _) = output.stdout.as_chunks::<2>();
     samples.iter().map(|&b| i16::from_le_bytes(b)).collect()
+}
+
+fn render_preview(tl: &Timeline, time: f64) -> image::RgbImage {
+    let args = preview_args(&tl.project, &tl.infos, time);
+    let (mut cmd, _file) = process::command(&ffmpeg(), &args).unwrap();
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    image::load_from_memory(&output.stdout).unwrap().into_rgb8()
+}
+
+fn classify([r, g, b]: [u8; 3]) -> Color {
+    match (r, g, b) {
+        (200.., ..60, ..60) => Color::Red,
+        (..60, ..60, 200..) => Color::Blue,
+        (..30, ..30, ..30) => Color::Black,
+        _ => Color::Other([r, g, b]),
+    }
 }
