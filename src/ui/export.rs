@@ -62,9 +62,6 @@ impl ExportDialog {
         selection: Option<Span>,
     ) -> Outcome<ExportRequest> {
         modal(ctx, "Export", |ui| {
-            if selection.is_none() {
-                self.range = Range::Timeline;
-            }
             ui.horizontal(|ui| {
                 ui.label("Range");
                 let whole = format!("Whole timeline ({})", timecode(project.duration()));
@@ -93,13 +90,7 @@ impl ExportDialog {
                 Ok(request) => {
                     let mut cmd = ffmpeg.ffmpeg();
                     cmd.args(export_args(project, infos, request.range, &request.output));
-                    ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                        ui.add(
-                            TextEdit::multiline(&mut command_line(&cmd).as_str())
-                                .code_editor()
-                                .desired_width(560.0),
-                        );
-                    });
+                    code_block(ui, &command_line(&cmd), 200.0);
                 }
                 Err(reason) => {
                     ui.weak(*reason);
@@ -172,13 +163,7 @@ pub fn progress(
                 }
                 ExportStatus::Failed(stderr) => {
                     ui.colored_label(ui.visuals().error_fg_color, "Export failed:");
-                    ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                        ui.add(
-                            TextEdit::multiline(&mut stderr.as_str())
-                                .code_editor()
-                                .desired_width(560.0),
-                        );
-                    });
+                    code_block(ui, stderr, 240.0);
                     close_button(ui)
                 }
             };
@@ -263,6 +248,18 @@ fn running_text(elapsed: Duration, progress: f32) -> String {
 /// `m:ss`, or `h:mm:ss` from an hour on.
 fn clock(duration: Duration) -> String {
     format_time(duration.as_secs_f64(), 0, false)
+}
+
+fn code_block(ui: &mut egui::Ui, mut text: &str, max_height: f32) {
+    ScrollArea::vertical()
+        .max_height(max_height)
+        .show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut text)
+                    .code_editor()
+                    .desired_width(560.0),
+            );
+        });
 }
 
 fn close_button(ui: &mut egui::Ui) -> Option<ProgressAction> {
