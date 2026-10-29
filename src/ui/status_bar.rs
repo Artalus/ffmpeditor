@@ -1,0 +1,95 @@
+use egui::{Align, Layout};
+
+use crate::model::Span;
+
+pub struct Status<'a> {
+    pub playhead: f64,
+    pub duration: f64,
+    pub selection: Option<Span>,
+    /// `ffmpeg -version` line, or why it could not be run.
+    pub ffmpeg: &'a Result<String, String>,
+    pub export_progress: Option<f32>,
+}
+
+pub fn show(ui: &mut egui::Ui, status: &Status) {
+    ui.horizontal(|ui| {
+        ui.monospace(format_time(status.playhead));
+        ui.weak("/");
+        ui.monospace(format_time(status.duration));
+        ui.separator();
+        ui.label(selection_text(status.selection));
+        if let Some(progress) = status.export_progress {
+            ui.separator();
+            ui.label(format!("exporting {:.0}%", progress * 100.0));
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            match status.ffmpeg {
+                Ok(version) => ui.weak(short_version(version)),
+                Err(err) => ui.colored_label(ui.visuals().error_fg_color, format!("ffmpeg: {err}")),
+            };
+        });
+    });
+}
+
+/// `h:mm:ss.mmm`
+pub fn format_time(seconds: f64) -> String {
+    let ms = (seconds.max(0.0) * 1000.0).round() as u64;
+    format!(
+        "{}:{:02}:{:02}.{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
+}
+
+fn selection_text(selection: Option<Span>) -> String {
+    match selection {
+        Some(span) => format!(
+            "selection {} – {} ({})",
+            format_time(span.start),
+            format_time(span.end),
+            format_time(span.len())
+        ),
+        None => "no selection".to_owned(),
+    }
+}
+
+/// Drops the copyright tail of `ffmpeg -version`, which would crowd the status bar.
+fn short_version(version: &str) -> &str {
+    version.split(" Copyright").next().unwrap_or(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_formatting() {
+        assert_eq!(format_time(0.0), "0:00:00.000");
+        assert_eq!(format_time(3723.4567), "1:02:03.457");
+        assert_eq!(format_time(59.9996), "0:01:00.000");
+        assert_eq!(format_time(-5.0), "0:00:00.000");
+        assert_eq!(format_time(36_000.0), "10:00:00.000");
+    }
+
+    #[test]
+    fn selection_shows_bounds_and_length() {
+        assert_eq!(selection_text(None), "no selection");
+        assert_eq!(
+            selection_text(Some(Span::new(1.0, 4.5))),
+            "selection 0:00:01.000 – 0:00:04.500 (0:00:03.500)"
+        );
+    }
+
+    #[test]
+    fn version_without_copyright() {
+        assert_eq!(
+            short_version(
+                "ffmpeg version 7.1-full_build Copyright (c) 2000-2024 the FFmpeg developers"
+            ),
+            "ffmpeg version 7.1-full_build"
+        );
+        assert_eq!(short_version("ffmpeg version n7"), "ffmpeg version n7");
+    }
+}
