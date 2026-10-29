@@ -1,3 +1,5 @@
+mod commands;
+mod editing;
 mod history;
 
 use std::path::{Path, PathBuf};
@@ -11,6 +13,8 @@ use crate::model::Project;
 use crate::render::Previewer;
 use crate::ui;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
+use commands::{Command, MenuState};
+use editing::{split_targets, step_frames};
 use history::History;
 
 pub struct App {
@@ -64,7 +68,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.media.poll();
         self.previewer.poll();
-        self.menu_bar(ui);
+        for command in self.commands(ui) {
+            self.run(command, ui.ctx());
+        }
         self.status_bar(ui);
         let timeline = self.timeline_panel(ui);
         self.viewer(ui);
@@ -75,16 +81,53 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("menu").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Quit").clicked() {
-                        ui.ctx().send_viewport_cmd(ViewportCommand::Close);
-                    }
-                });
-            });
-        });
+    fn commands(&self, ui: &mut egui::Ui) -> Vec<Command> {
+        let mut commands = if ui.ctx().text_edit_focused() {
+            Vec::new()
+        } else {
+            commands::read_shortcuts(ui.ctx())
+        };
+        let state = MenuState {
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
+            clip_selected: self.timeline.selected_clip.is_some(),
+        };
+        commands.extend(commands::menu_bar(ui, &state));
+        commands
+    }
+
+    fn run(&mut self, command: Command, ctx: &Context) {
+        let playhead = &mut self.timeline.playhead;
+        let duration = self.project.duration();
+        let fps = self.project.settings.fps;
+        match command {
+            Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Command::Undo => {
+                self.history.undo(&mut self.project);
+            }
+            Command::Redo => {
+                self.history.redo(&mut self.project);
+            }
+            Command::Split => self.split_at_playhead(),
+            Command::DeleteClip => self.delete_selected_clip(),
+            Command::GoToStart => *playhead = 0.0,
+            Command::GoToEnd => *playhead = duration,
+            Command::PreviousFrame => *playhead = step_frames(*playhead, fps, -1, duration),
+            Command::NextFrame => *playhead = step_frames(*playhead, fps, 1, duration),
+        }
+    }
+
+    fn split_at_playhead(&mut self) {
+        let at = self.timeline.playhead;
+        for id in split_targets(&self.project, self.timeline.selected_clip, at) {
+            self.project.split_clip(id, at);
+        }
+    }
+
+    fn delete_selected_clip(&mut self) {
+        if let Some(id) = self.timeline.selected_clip.take() {
+            self.project.remove_clip(id);
+        }
     }
 
     fn status_bar(&self, ui: &mut egui::Ui) {
