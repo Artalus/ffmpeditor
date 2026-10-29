@@ -139,7 +139,7 @@ impl App {
                 self.project.append_clip(id, track, duration);
             });
         if placed.is_err() && !known {
-            self.project.sources.retain(|s| s.id != id);
+            self.project.remove_source(id);
         }
         placed
     }

@@ -140,6 +140,10 @@ impl Project {
         id
     }
 
+    pub fn remove_source(&mut self, id: SourceId) {
+        self.sources.retain(|s| s.id != id);
+    }
+
     pub fn append_clip(&mut self, source: SourceId, track: Track, source_duration: f64) -> ClipId {
         let id = self.next_clip_id();
         let start = self.track_end(track);
@@ -434,12 +438,20 @@ mod tests {
     }
 
     #[test]
-    fn add_source_dedupes_by_path() {
+    fn sources_dedupe_by_path_and_can_be_removed() {
         let mut project = Project::default();
         let a = project.add_source("a.mp4".into());
         let b = project.add_source("b.mp4".into());
         assert_ne!(a, b);
         assert_eq!(project.add_source("a.mp4".into()), a);
+        project.remove_source(a);
+        assert_eq!(
+            project.sources,
+            [Source {
+                id: b,
+                path: "b.mp4".into()
+            }]
+        );
     }
 
     #[test]
