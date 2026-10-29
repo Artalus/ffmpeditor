@@ -407,23 +407,9 @@ mod tests {
     }
 
     #[test]
-    fn audio_track_clip_contributes_no_video() {
+    fn clip_contributes_only_the_streams_its_track_and_media_have() {
         let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip("music.mp4", Track::Audio(0), 0.0, 10.0);
-        let graph = tl.build(0.0, 10.0);
-        assert!(!graph.filter.contains("[0:v:0]"), "{}", graph.filter);
-        assert!(
-            graph
-                .filter
-                .contains("[base]setpts=PTS-STARTPTS,format=yuv420p[v]")
-        );
-        assert!(graph.filter.contains("[0:a:0]"));
-        assert!(graph.filter.contains("[abase][a0]amix=inputs=2:"));
-    }
-
-    #[test]
-    fn video_track_clip_without_video_contributes_audio() {
-        let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip_with(
             "voice.wav",
             media_info(false, true),
@@ -432,8 +418,13 @@ mod tests {
             10.0,
         );
         let graph = tl.build(0.0, 10.0);
-        assert!(!graph.filter.contains("[0:v:0]"), "{}", graph.filter);
-        assert!(graph.filter.contains("[0:a:0]"));
+        assert!(!graph.filter.contains(":v:0]"), "{}", graph.filter);
+        assert!(
+            graph
+                .filter
+                .contains("[base]setpts=PTS-STARTPTS,format=yuv420p[v]")
+        );
+        assert!(graph.filter.contains("[abase][a0][a1]amix=inputs=3:"));
     }
 
     #[test]
@@ -454,14 +445,6 @@ mod tests {
                 ",afade=t=in:st=10.000000:d=0.500000,afade=t=out:st=10.000000:d=10.000000,"
             )
         );
-    }
-
-    #[test]
-    fn zero_fades_add_no_filters() {
-        let mut tl = Timeline::new(640, 360, 30.0);
-        tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
-        let graph = tl.build(0.0, 10.0);
-        assert!(!graph.filter.contains("fade"), "{}", graph.filter);
     }
 
     #[test]

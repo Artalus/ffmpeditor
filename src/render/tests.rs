@@ -28,13 +28,19 @@ fn export_args_encode_with_project_settings() {
     tl.project.settings.video_codec = "libx265".into();
     tl.project.settings.video_bitrate_kbps = 8000;
     tl.project.settings.audio_bitrate_kbps = 128;
-    let args = export_args(
-        &tl.project,
-        &tl.infos,
-        Span::new(0.0, 1.0),
-        Path::new("out.mp4"),
-    );
-    let tail = args.iter().skip_while(|a| *a != "-map").map(String::as_str);
+    let args = |output: &str| {
+        export_args(
+            &tl.project,
+            &tl.infos,
+            Span::new(0.0, 1.0),
+            Path::new(output),
+        )
+    };
+    let args_mp4 = args("out.mp4");
+    let tail = args_mp4
+        .iter()
+        .skip_while(|a| *a != "-map")
+        .map(String::as_str);
     assert_eq!(
         tail.collect::<Vec<_>>(),
         [
@@ -63,19 +69,6 @@ fn export_args_encode_with_project_settings() {
             "out.mp4",
         ]
     );
-}
-
-#[test]
-fn faststart_only_for_quicktime_containers() {
-    let tl = Timeline::new(1280, 720, 60.0);
-    let args = |output: &str| {
-        export_args(
-            &tl.project,
-            &tl.infos,
-            Span::new(0.0, 1.0),
-            Path::new(output),
-        )
-    };
     assert!(args("a.MOV").contains(&"+faststart".to_owned()));
     assert!(!args("a.mkv").contains(&"+faststart".to_owned()));
 }
@@ -224,7 +217,7 @@ fn preview_composites_tracks_and_cuts() {
     tl.clip(&fx.blue_4x3, Track::Video(1), 3.0, 1.0);
     tl.clip(&fx.red_16x9, Track::Video(0), 2.5, 2.0);
     let pixel = |time: f64, x: u32| {
-        let image = render_preview(&tl, time);
+        let image = render_preview(&tl, time, process::MAX_INLINE_COMMAND_LINE);
         assert_eq!(image.dimensions(), (320, 180));
         classify(image.get_pixel(x, 90).0)
     };
@@ -243,15 +236,7 @@ fn preview_works_with_graph_in_file() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
     tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
-    let args = preview_args(&tl.project, &tl.infos, 0.5);
-    let (mut cmd, _file) = process::command(&ffmpeg(), &args, 0).unwrap();
-    let output = cmd.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let image = image::load_from_memory(&output.stdout).unwrap().into_rgb8();
+    let image = render_preview(&tl, 0.5, 0);
     assert_eq!(classify(image.get_pixel(160, 90).0), Color::Red);
 }
 
@@ -415,10 +400,10 @@ fn audio_samples(path: &Path) -> Vec<i16> {
     samples.iter().map(|&b| i16::from_le_bytes(b)).collect()
 }
 
-fn render_preview(tl: &Timeline, time: f64) -> image::RgbImage {
+/// `inline_limit` as in `process::command`: 0 forces the graph into a file.
+fn render_preview(tl: &Timeline, time: f64, inline_limit: usize) -> image::RgbImage {
     let args = preview_args(&tl.project, &tl.infos, time);
-    let (mut cmd, _file) =
-        process::command(&ffmpeg(), &args, process::MAX_INLINE_COMMAND_LINE).unwrap();
+    let (mut cmd, _file) = process::command(&ffmpeg(), &args, inline_limit).unwrap();
     let output = run_ok(&mut cmd);
     image::load_from_memory(&output.stdout).unwrap().into_rgb8()
 }
