@@ -73,47 +73,38 @@ impl ProjectSettingsDialog {
                 .num_columns(2)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
-                    ui.label("Preset");
-                    preset_combo(ui, s);
-                    ui.end_row();
-
-                    ui.label("Resolution");
-                    ui.horizontal(|ui| {
-                        ui.add(DragValue::new(&mut s.width).range(16..=8192));
-                        ui.label("×");
-                        ui.add(DragValue::new(&mut s.height).range(16..=8192));
+                    row(ui, "Preset", |ui| preset_combo(ui, s));
+                    row(ui, "Resolution", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(DragValue::new(&mut s.width).range(16..=8192));
+                            ui.label("×");
+                            ui.add(DragValue::new(&mut s.height).range(16..=8192));
+                        })
                     });
-                    ui.end_row();
-
-                    ui.label("Frame rate");
-                    ui.add(
-                        DragValue::new(&mut s.fps)
-                            .range(1.0..=240.0)
-                            .speed(0.1)
-                            .max_decimals(3)
-                            .suffix(" fps"),
-                    );
-                    ui.end_row();
-
-                    ui.label("Video codec");
-                    editable_combo(ui, &mut s.video_codec, VIDEO_CODECS);
-                    ui.end_row();
-
-                    ui.label("Video bitrate");
-                    bitrate(ui, &mut s.video_bitrate_kbps);
-                    ui.end_row();
-
-                    ui.label("Audio codec");
-                    combo(ui, "audio_codec", &mut s.audio_codec, AUDIO_CODECS);
-                    ui.end_row();
-
-                    ui.label("Audio bitrate");
-                    bitrate(ui, &mut s.audio_bitrate_kbps);
-                    ui.end_row();
-
-                    ui.label("Format");
-                    combo(ui, "format", &mut s.format, FORMATS);
-                    ui.end_row();
+                    row(ui, "Frame rate", |ui| {
+                        ui.add(
+                            DragValue::new(&mut s.fps)
+                                .range(1.0..=240.0)
+                                .speed(0.1)
+                                .max_decimals(3)
+                                .suffix(" fps"),
+                        )
+                    });
+                    row(ui, "Video codec", |ui| {
+                        editable_combo(ui, &mut s.video_codec, VIDEO_CODECS)
+                    });
+                    row(ui, "Video bitrate", |ui| {
+                        bitrate(ui, &mut s.video_bitrate_kbps)
+                    });
+                    row(ui, "Audio codec", |ui| {
+                        combo(ui, "audio_codec", &mut s.audio_codec, AUDIO_CODECS)
+                    });
+                    row(ui, "Audio bitrate", |ui| {
+                        bitrate(ui, &mut s.audio_bitrate_kbps)
+                    });
+                    row(ui, "Format", |ui| {
+                        combo(ui, "format", &mut s.format, FORMATS)
+                    });
                 });
             if !s.width.is_multiple_of(2) || !s.height.is_multiple_of(2) {
                 ui.colored_label(
@@ -134,6 +125,12 @@ impl ProjectSettingsDialog {
 
 pub fn matching_preset(settings: &ProjectSettings) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.matches(settings))
+}
+
+fn row<R>(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui) -> R) {
+    ui.label(label);
+    content(ui);
+    ui.end_row();
 }
 
 fn preset_combo(ui: &mut egui::Ui, settings: &mut ProjectSettings) {
