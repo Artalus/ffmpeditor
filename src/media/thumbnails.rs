@@ -77,7 +77,8 @@ pub fn read_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::{self, TestMedia};
+    use crate::media::test_media::TestMedia;
+    use crate::test_support;
 
     fn video(width: u32, height: u32) -> VideoInfo {
         VideoInfo {
@@ -139,7 +140,7 @@ mod tests {
     fn one_thumbnail_per_second_from_keyframes() {
         let media = TestMedia::new("thumbnails");
         let layout = Layout::new(3.0, &video(320, 240));
-        let output = command(&test_media::ffmpeg(), &media.video_with_audio(), &layout)
+        let output = command(&test_support::ffmpeg(), &media.video_with_audio(), &layout)
             .output()
             .unwrap();
         assert!(output.status.success());

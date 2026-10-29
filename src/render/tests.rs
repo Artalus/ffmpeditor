@@ -5,9 +5,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::ffmpeg::Ffmpeg;
 use crate::media::VideoInfo;
 use crate::model::{ClipId, Project, Span, Track};
+use crate::test_support::{ffmpeg, wait_until};
 
 struct Timeline {
     project: Project,
@@ -210,10 +210,9 @@ fn export_can_be_cancelled() {
     .chain([output.to_string_lossy().into_owned()])
     .collect();
     let mut job = ExportJob::start(&ffmpeg(), args, 600.0).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while job.status() == (ExportStatus::Running { progress: 0.0 }) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_until(10, || {
+        job.status() != (ExportStatus::Running { progress: 0.0 })
+    });
     assert!(
         matches!(job.status(), ExportStatus::Running { progress } if progress > 0.0 && progress < 1.0)
     );
@@ -279,17 +278,13 @@ fn previewer_delivers_texture_and_skips_repeated_requests() {
     let ffmpeg = ffmpeg();
     let mut previewer = Previewer::new(egui::Context::default());
     previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while previewer.texture().is_none() && previewer.error().is_none() && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(10));
+    wait_until(10, || {
         previewer.poll();
-    }
+        previewer.texture().is_some() || previewer.error().is_some()
+    });
     assert_eq!(previewer.error(), None);
     assert_eq!(previewer.texture().unwrap().size(), [960, 540]);
-    while previewer.is_busy() {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until(10, || !previewer.is_busy());
     previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
     assert!(!previewer.is_busy());
 }
@@ -300,11 +295,10 @@ fn previewer_reports_errors() {
     tl.clip("definitely-missing.mp4", Track::Video(0), 0.0, 1.0);
     let mut previewer = Previewer::new(egui::Context::default());
     previewer.request(&ffmpeg(), &tl.project, &tl.infos, 0.5);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while previewer.error().is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
+    wait_until(10, || {
         previewer.poll();
-    }
+        previewer.error().is_some()
+    });
     assert!(
         previewer
             .error()
@@ -351,10 +345,6 @@ impl Timeline {
     fn edit(&mut self, id: ClipId) -> &mut crate::model::Clip {
         self.project.clip_mut(id).unwrap()
     }
-}
-
-fn ffmpeg() -> Ffmpeg {
-    Ffmpeg::new(Path::new("ffmpeg"))
 }
 
 /// Generated once per test run; stored under target/ so concurrent runs elsewhere don't collide.
@@ -427,15 +417,8 @@ fn output_path(name: &str) -> PathBuf {
 }
 
 fn wait(job: &ExportJob) -> ExportStatus {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match job.status() {
-            ExportStatus::Running { .. } if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            status => return status,
-        }
-    }
+    wait_until(30, || !matches!(job.status(), ExportStatus::Running { .. }));
+    job.status()
 }
 
 #[derive(Debug)]

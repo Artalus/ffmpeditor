@@ -380,14 +380,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::{self, TestMedia, wait_until};
+    use crate::media::test_media::TestMedia;
+    use crate::test_support::{self, wait_until};
 
     fn cache() -> MediaCache {
-        MediaCache::new(egui::Context::default(), test_media::ffmpeg())
+        MediaCache::new(egui::Context::default(), test_support::ffmpeg())
     }
 
     fn wait_for_extraction(cache: &mut MediaCache, ids: &[SourceId]) {
-        wait_until(|| {
+        wait_until(30, || {
             cache.poll();
             ids.iter().all(|&id| !cache.is_loading(id))
         });
@@ -455,7 +456,7 @@ mod tests {
     fn cancel_kills_running_ffmpeg() {
         let workers = Arc::new(Workers::new(egui::Context::default()));
         let endless = || {
-            let mut cmd = test_media::ffmpeg().ffmpeg();
+            let mut cmd = test_support::ffmpeg().ffmpeg();
             cmd.args([
                 "-v", "error", "-f", "lavfi", "-i", "sine", "-f", "s16le", "-",
             ]);
@@ -469,7 +470,7 @@ mod tests {
                 })
             })
         };
-        wait_until(|| lock(&workers.running[0]).is_some());
+        wait_until(30, || lock(&workers.running[0]).is_some());
         workers.cancel_before(1);
         assert!(running.join().unwrap().is_err());
         assert!(lock(&workers.running[0]).is_none());

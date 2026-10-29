@@ -177,8 +177,9 @@ fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::test_media::{self, TestMedia};
+    use super::test_media::TestMedia;
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn probe_video_with_audio() {
@@ -271,7 +272,7 @@ mod tests {
     #[test]
     fn probe_generated_media() {
         let media = TestMedia::new("probe");
-        let ffmpeg = test_media::ffmpeg();
+        let ffmpeg = test_support::ffmpeg();
 
         let info = probe(&ffmpeg, &media.video_with_audio()).unwrap();
         assert!((info.duration - 3.0).abs() < 0.1, "{info:?}");

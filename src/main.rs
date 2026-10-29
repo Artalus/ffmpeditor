@@ -8,6 +8,8 @@ mod ffmpeg;
 mod media;
 mod model;
 mod render;
+#[cfg(test)]
+mod test_support;
 mod ui;
 
 fn main() -> eframe::Result {
