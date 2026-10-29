@@ -1,6 +1,7 @@
 //! Source media inspection: probing, timeline thumbnails, waveforms.
 
 use std::collections::HashMap;
+use std::io::{self, Read};
 use std::path::Path;
 
 use anyhow::{Context, bail};
@@ -8,6 +9,8 @@ use serde::Deserialize;
 
 use crate::ffmpeg::Ffmpeg;
 use crate::model::SourceId;
+
+mod waveform;
 
 /// Used when a stream reports no usable frame rate, so frame-step math never divides by zero.
 const FALLBACK_FPS: f64 = 30.0;
@@ -57,7 +60,12 @@ pub fn probe(ffmpeg: &Ffmpeg, path: &Path) -> anyhow::Result<MediaInfo> {
 impl Waveform {
     /// Highest peak within source time `start..end`.
     pub fn peak(&self, start: f64, end: f64) -> f32 {
-        todo!()
+        let first = (start * self.peaks_per_second).floor().max(0.0) as usize;
+        let last = (end * self.peaks_per_second).ceil().max(0.0) as usize;
+        let last = last.min(self.peaks.len());
+        self.peaks
+            .get(first..last)
+            .map_or(0.0, |peaks| peaks.iter().copied().fold(0.0, f32::max))
     }
 }
 
@@ -193,6 +201,20 @@ impl ProbeStream {
     }
 }
 
+/// Like `read_exact`, but at EOF returns how much was filled instead of failing.
+fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +305,37 @@ mod tests {
         let no_duration = r#"{"streams": [{"codec_type": "audio"}], "format": {}}"#;
         assert!(parse_probe(no_duration.as_bytes()).is_err());
         assert!(parse_probe(b"not json").is_err());
+    }
+
+    #[test]
+    fn waveform_peak_covers_touched_buckets() {
+        let waveform = Waveform {
+            peaks_per_second: 10.0,
+            peaks: vec![0.1, 0.5, 0.2, 0.9, 0.3],
+        };
+        assert_eq!(waveform.peak(0.0, 0.1), 0.1);
+        assert_eq!(waveform.peak(0.0, 0.25), 0.5);
+        assert_eq!(waveform.peak(0.21, 0.22), 0.2);
+        assert_eq!(waveform.peak(0.15, 0.31), 0.9);
+        assert_eq!(waveform.peak(-5.0, 100.0), 0.9);
+        assert_eq!(waveform.peak(0.4, 1.0), 0.3);
+    }
+
+    #[test]
+    fn waveform_peak_out_of_range_is_silent() {
+        let waveform = Waveform {
+            peaks_per_second: 10.0,
+            peaks: vec![0.5; 5],
+        };
+        assert_eq!(waveform.peak(0.5, 1.0), 0.0);
+        assert_eq!(waveform.peak(-1.0, -0.5), 0.0);
+        assert_eq!(waveform.peak(0.3, 0.3), 0.0);
+        assert_eq!(waveform.peak(0.3, 0.1), 0.0);
+        assert_eq!(waveform.peak(f64::NAN, 0.3), 0.5);
+        let empty = Waveform {
+            peaks_per_second: 10.0,
+            peaks: Vec::new(),
+        };
+        assert_eq!(empty.peak(0.0, 1.0), 0.0);
     }
 }
