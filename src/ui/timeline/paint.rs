@@ -1,8 +1,8 @@
 //! Drawing of ruler, track headers, lanes with clips, selection and playhead.
 
 use egui::{
-    Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Visuals, pos2,
-    vec2,
+    Align2, Color32, FontId, Mesh, Painter, Pos2, Rangef, Rect, Shape, Stroke, StrokeKind, Visuals,
+    pos2, vec2,
 };
 
 use super::TimelineState;
@@ -19,7 +19,7 @@ const ERROR_CLIP: Color32 = Color32::from_rgb(140, 35, 35);
 const CLIP_BORDER: Color32 = Color32::from_black_alpha(160);
 const SELECTED_BORDER: Color32 = Color32::WHITE;
 const WAVEFORM: Color32 = Color32::from_rgb(140, 225, 185);
-const WAVEFORM_MUTED: Color32 = Color32::from_rgb(65, 90, 80);
+const WAVEFORM_MUTED: Color32 = Color32::from_rgb(85, 125, 110);
 const MUTE_SHADE: Color32 = Color32::from_rgba_unmultiplied_const(110, 0, 0, 90);
 const FADE_SHADE: Color32 = Color32::from_black_alpha(120);
 const FADE_LINE: Color32 = Color32::from_gray(230);
@@ -303,6 +303,10 @@ fn ruler(painter: &Painter, scene: &Scene) {
     let rect = scene.areas.ruler;
     let axis = &scene.view.axis;
     painter.rect_filled(rect, 0.0, visuals.panel_fill);
+    if let Some(x) = selection_x(painter, scene) {
+        let band = Rect::from_x_y_ranges(x, rect.y_range());
+        painter.rect_filled(band, 0.0, visuals.selection.bg_fill.gamma_multiply(0.6));
+    }
     let stroke = Stroke::new(1.0, visuals.weak_text_color());
     let ticks = Ticks::for_zoom(axis.pixels_per_second);
     for (t, major) in ticks.within(axis.time(rect.left()), axis.time(rect.right())) {
@@ -339,25 +343,18 @@ fn corner(painter: &Painter, scene: &Scene) {
     );
 }
 
+/// The ruler draws its part of the selection band itself, beneath the tick labels.
 fn markers(painter: &Painter, scene: &Scene) {
-    let axis = &scene.view.axis;
     let ruler = scene.areas.ruler;
-    let full_height = ruler.top()..=scene.areas.rows.bottom();
-    let view_x = painter.clip_rect().x_range().expand(2.0);
-    if let Some(selection) = scene.state.selection {
-        let x0 = axis.x(selection.start).max(view_x.min);
-        let x1 = axis.x(selection.end).min(view_x.max);
-        if x1 > x0 {
-            let fill = scene.visuals.selection.bg_fill;
-            let band = Rect::from_x_y_ranges(x0..=x1, full_height.clone());
-            painter.rect_filled(band, 0.0, fill.gamma_multiply(0.2));
-            let on_ruler = Rect::from_x_y_ranges(x0..=x1, ruler.y_range());
-            painter.rect_filled(on_ruler, 0.0, fill.gamma_multiply(0.5));
-        }
+    let rows = scene.areas.rows;
+    if let Some(x) = selection_x(painter, scene) {
+        let band = Rect::from_x_y_ranges(x, rows.y_range());
+        let fill = scene.visuals.selection.bg_fill.gamma_multiply(0.2);
+        painter.rect_filled(band, 0.0, fill);
     }
-    let x = axis.x(scene.state.playhead);
-    if view_x.contains(x) {
-        painter.vline(x, full_height, Stroke::new(1.5, PLAYHEAD));
+    let x = scene.view.axis.x(scene.state.playhead);
+    if painter.clip_rect().x_range().expand(2.0).contains(x) {
+        painter.vline(x, ruler.top()..=rows.bottom(), Stroke::new(1.5, PLAYHEAD));
         let head = vec![
             pos2(x - 5.0, ruler.top()),
             pos2(x + 5.0, ruler.top()),
@@ -365,4 +362,15 @@ fn markers(painter: &Painter, scene: &Scene) {
         ];
         painter.add(Shape::convex_polygon(head, PLAYHEAD, Stroke::NONE));
     }
+}
+
+fn selection_x(painter: &Painter, scene: &Scene) -> Option<Rangef> {
+    let selection = scene.state.selection?;
+    let view_x = painter.clip_rect().x_range().expand(2.0);
+    let axis = &scene.view.axis;
+    let x = Rangef::new(
+        axis.x(selection.start).max(view_x.min),
+        axis.x(selection.end).min(view_x.max),
+    );
+    (x.span() > 0.0).then_some(x)
 }
