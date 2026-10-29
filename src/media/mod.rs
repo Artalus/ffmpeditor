@@ -10,7 +10,11 @@ use serde::Deserialize;
 use crate::ffmpeg::Ffmpeg;
 use crate::model::SourceId;
 
+mod thumbnails;
 mod waveform;
+
+/// Thumbnail textures are this tall; width follows the source's aspect ratio.
+pub const THUMBNAIL_HEIGHT: u32 = 72;
 
 /// Used when a stream reports no usable frame rate, so frame-step math never divides by zero.
 const FALLBACK_FPS: f64 = 30.0;
