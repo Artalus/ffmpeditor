@@ -111,7 +111,6 @@ impl ClipDrag {
     }
 }
 
-/// Range selected on the ruler between the press `anchor` and the pointer.
 pub fn range_selection(project: &Project, anchor: f64, pointer: f64, distance: f64) -> Span {
     let targets = snap_targets(project, None, None);
     Span::new(

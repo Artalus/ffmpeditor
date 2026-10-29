@@ -36,7 +36,6 @@ impl App {
         self.dialog = Dialog::Export(ExportDialog::new(&output, self.timeline.selection));
     }
 
-    /// Progress window of the running export, kept open with the result once it ends.
     pub(super) fn export_progress(&mut self, ctx: &Context) {
         let Some(export) = &mut self.export else {
             return;

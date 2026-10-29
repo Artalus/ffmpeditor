@@ -123,7 +123,6 @@ impl ExportDialog {
     }
 }
 
-/// Progress of a running export, then its result until closed.
 pub fn progress(
     ctx: &Context,
     status: &ExportStatus,

@@ -6,7 +6,6 @@ use crate::render::Previewer;
 
 const ERROR_COLOR: Color32 = Color32::from_rgb(255, 120, 120);
 
-/// Fills the available space with the preview frame, letterboxed on black.
 pub fn show(ui: &mut egui::Ui, previewer: &Previewer, placeholder: &str) {
     let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
     let painter = ui.painter_at(rect);

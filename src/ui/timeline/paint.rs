@@ -1,5 +1,3 @@
-//! Drawing of ruler, track headers, lanes with clips, selection and playhead.
-
 use egui::{
     Align2, Color32, FontId, Mesh, Painter, Pos2, Rangef, Rect, Shape, Stroke, StrokeKind, Visuals,
     pos2, vec2,

@@ -39,7 +39,6 @@ pub fn confirm_overwrite(ctx: &Context, path: &Path) -> Outcome<()> {
     })
 }
 
-/// Non-blocking list of messages, each dismissable.
 pub fn errors(ctx: &Context, errors: &mut Vec<String>) {
     if errors.is_empty() {
         return;

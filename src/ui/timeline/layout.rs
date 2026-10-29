@@ -19,7 +19,6 @@ const TICK_STEPS: [f64; 22] = [
     900.0, 1800.0, 3600.0, 7200.0, 18000.0, 36000.0,
 ];
 
-/// Screen regions of the widget: ruler on top, track names on the left, rows below the ruler.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Areas {
     pub corner: Rect,
@@ -58,12 +57,10 @@ pub struct Lane {
     height: f32,
 }
 
-/// Screen placement of the rows: lanes plus the scroll offsets.
 pub struct View {
     pub axis: TimeAxis,
     pub lanes: Vec<Lane>,
     pub rows: Rect,
-    /// Screen y of the rows content top (rows top minus vertical scroll).
     pub content_top: f32,
 }
 

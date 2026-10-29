@@ -111,8 +111,6 @@ fn axis(state: &TimelineState, areas: &Areas) -> TimeAxis {
     }
 }
 
-/// Wheel scrolls time, Ctrl+wheel zooms around the pointer;
-/// Alt+wheel or wheel over the track names scrolls the rows vertically.
 fn navigate(
     ui: &Ui,
     state: &mut TimelineState,
@@ -153,8 +151,6 @@ fn navigate(
     }
 }
 
-/// Click sets the playhead and clears the range; drag selects a range.
-/// Near a range edge, click keeps the range and drag moves that edge.
 fn edit_range(
     ui: &Ui,
     response: &Response,
@@ -191,8 +187,6 @@ fn edit_range(
     }
 }
 
-/// Click selects a clip (or deselects on empty space) and sets the playhead;
-/// drag moves a clip or trims it by an edge.
 fn edit_clips(
     ui: &Ui,
     response: &Response,
@@ -265,8 +259,6 @@ fn set_cursor(
     }
 }
 
-/// Text cursor on the ruler and empty lane space;
-/// resize near range and clip edges, default over clip bodies.
 fn hover_cursor(
     ruler: &Response,
     rows: &Response,

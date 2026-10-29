@@ -355,7 +355,6 @@ impl App {
             .show(ui, |ui| ui::viewer::show(ui, &self.previewer, placeholder));
     }
 
-    /// Turns finished edits into undo steps and keeps the preview at the playhead.
     fn settle(&mut self, timeline: &TimelineResponse) {
         if !timeline.interacting {
             self.history.commit(&self.project);
