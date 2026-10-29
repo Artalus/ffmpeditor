@@ -3,28 +3,26 @@ use egui::{Align, Layout};
 use crate::model::Span;
 use crate::ui::format_time;
 
-pub struct Status<'a> {
-    pub playhead: f64,
-    pub duration: f64,
-    pub selection: Option<Span>,
-    /// `ffmpeg -version` line, or why it could not be run.
-    pub ffmpeg: &'a Result<String, String>,
-    pub export_progress: Option<f32>,
-}
-
-pub fn show(ui: &mut egui::Ui, status: &Status) {
+pub fn show(
+    ui: &mut egui::Ui,
+    playhead: f64,
+    duration: f64,
+    selection: Option<Span>,
+    ffmpeg: &Result<String, String>,
+    export_progress: Option<f32>,
+) {
     ui.horizontal(|ui| {
-        ui.monospace(timecode(status.playhead));
+        ui.monospace(timecode(playhead));
         ui.weak("/");
-        ui.monospace(timecode(status.duration));
+        ui.monospace(timecode(duration));
         ui.separator();
-        ui.label(selection_text(status.selection));
-        if let Some(progress) = status.export_progress {
+        ui.label(selection_text(selection));
+        if let Some(progress) = export_progress {
             ui.separator();
             ui.label(format!("exporting {:.0}%", progress * 100.0));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            match status.ffmpeg {
+            match ffmpeg {
                 Ok(version) => ui.weak(short_version(version)),
                 Err(err) => ui.colored_label(ui.visuals().error_fg_color, format!("ffmpeg: {err}")),
             };

@@ -326,14 +326,14 @@ impl App {
     }
 
     fn status_bar(&self, ui: &mut egui::Ui) {
-        let status = ui::status_bar::Status {
-            playhead: self.timeline.playhead,
-            duration: self.project.duration(),
-            selection: self.timeline.selection,
-            ffmpeg: &self.ffmpeg_status,
-            export_progress: self.export_fraction(),
-        };
-        egui::Panel::bottom("status").show(ui, |ui| ui::status_bar::show(ui, &status));
+        let duration = self.project.duration();
+        let timeline = &self.timeline;
+        egui::Panel::bottom("status").show(ui, |ui| {
+            let ffmpeg = &self.ffmpeg_status;
+            let progress = self.export_fraction();
+            let (playhead, selection) = (timeline.playhead, timeline.selection);
+            ui::status_bar::show(ui, playhead, duration, selection, ffmpeg, progress)
+        });
     }
 
     fn timeline_panel(&mut self, ui: &mut egui::Ui) -> TimelineResponse {
