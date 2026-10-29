@@ -1,4 +1,4 @@
-//! Pure timeline geometry: time <-> x mapping, track rows, ruler ticks.
+//! Pure timeline geometry: screen regions, time <-> x mapping, track lanes, ruler ticks.
 
 use egui::{Pos2, Rect, pos2};
 
@@ -257,6 +257,11 @@ impl Ticks {
         Self { major, minor }
     }
 
+    /// Fractional digits that tell major ticks apart: none for whole seconds, then one per decade.
+    pub fn label_decimals(self) -> usize {
+        usize::from(self.major < 1.0) + usize::from(self.major < 0.1)
+    }
+
     /// `(time, is_major)` for every tick within `start..=end`.
     pub fn within(self, start: f64, end: f64) -> impl Iterator<Item = (f64, bool)> {
         let per_major = (self.major / self.minor).round() as i64;
@@ -269,30 +274,6 @@ impl Ticks {
 fn divides(major: f64, minor: f64) -> bool {
     let ratio = major / minor;
     (ratio - ratio.round()).abs() < 1e-6
-}
-
-/// `m:ss` or `h:mm:ss`, with as many decimals as a tick `step` needs.
-pub fn format_time(t: f64, step: f64) -> String {
-    let decimals: usize = if step >= 1.0 {
-        0
-    } else if step >= 0.1 {
-        1
-    } else {
-        2
-    };
-    let scale = 10_i64.pow(decimals as u32);
-    let total = (t.max(0.0) * scale as f64).round() as i64;
-    let (secs, frac) = (total / scale, total % scale);
-    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-    let mut text = if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    };
-    if decimals > 0 {
-        text += &format!(".{frac:0decimals$}");
-    }
-    text
 }
 
 #[cfg(test)]
@@ -501,12 +482,14 @@ mod tests {
     }
 
     #[test]
-    fn time_labels() {
-        assert_eq!(format_time(0.0, 1.0), "0:00");
-        assert_eq!(format_time(75.0, 5.0), "1:15");
-        assert_eq!(format_time(3725.0, 60.0), "1:02:05");
-        assert_eq!(format_time(1.5, 0.5), "0:01.5");
-        assert_eq!(format_time(61.25, 0.05), "1:01.25");
-        assert_eq!(format_time(59.99, 0.1), "1:00.0");
+    fn labels_get_decimals_below_a_second() {
+        let decimals = |step| {
+            Ticks {
+                major: step,
+                minor: step,
+            }
+            .label_decimals()
+        };
+        assert_eq!([5.0, 1.0, 0.5, 0.1, 0.05].map(decimals), [0, 0, 1, 1, 2]);
     }
 }

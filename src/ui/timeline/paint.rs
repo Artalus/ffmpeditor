@@ -6,9 +6,10 @@ use egui::{
 };
 
 use super::TimelineState;
-use super::layout::{Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height, format_time};
+use super::layout::{Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height};
 use crate::media::MediaCache;
 use crate::model::{Clip, Project};
+use crate::ui::format_time;
 
 const CLIP_ROUNDING: f32 = 3.0;
 const VIDEO_CLIP: Color32 = Color32::from_rgb(50, 80, 135);
@@ -312,7 +313,7 @@ fn ruler(painter: &Painter, scene: &Scene) {
         let height = rect.height() * if major { 0.5 } else { 0.2 };
         painter.vline(x, rect.bottom() - height..=rect.bottom(), stroke);
         if major {
-            let text = format_time(t, ticks.major);
+            let text = format_time(t, ticks.label_decimals(), false);
             let pos = pos2(x + 3.0, rect.top() + 1.0);
             painter.text(
                 pos,
@@ -330,7 +331,7 @@ fn corner(painter: &Painter, scene: &Scene) {
     let visuals = scene.visuals;
     let rect = scene.areas.corner;
     painter.rect_filled(rect, 0.0, visuals.panel_fill);
-    let text = format_time(scene.state.playhead, 0.01);
+    let text = format_time(scene.state.playhead, 2, false);
     let font = FontId::monospace(11.0);
     painter.text(
         rect.center(),

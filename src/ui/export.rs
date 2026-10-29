@@ -9,7 +9,8 @@ use crate::media::MediaInfos;
 use crate::model::{Project, Span};
 use crate::render::{ExportStatus, export_args};
 use crate::ui::dialogs::{Outcome, confirm_buttons, modal};
-use crate::ui::status_bar::format_time;
+use crate::ui::format_time;
+use crate::ui::status_bar::timecode;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Range {
@@ -66,10 +67,10 @@ impl ExportDialog {
             }
             ui.horizontal(|ui| {
                 ui.label("Range");
-                let whole = format!("Whole timeline ({})", format_time(project.duration()));
+                let whole = format!("Whole timeline ({})", timecode(project.duration()));
                 ui.radio_value(&mut self.range, Range::Timeline, whole);
                 let selected = match selection {
-                    Some(span) => format!("Selection ({})", format_time(span.len())),
+                    Some(span) => format!("Selection ({})", timecode(span.len())),
                     None => "Selection".to_owned(),
                 };
                 ui.add_enabled_ui(selection.is_some(), |ui| {
@@ -261,13 +262,7 @@ fn running_text(elapsed: Duration, progress: f32) -> String {
 
 /// `m:ss`, or `h:mm:ss` from an hour on.
 fn clock(duration: Duration) -> String {
-    let secs = duration.as_secs_f64().round() as u64;
-    let (hours, minutes, secs) = (secs / 3600, secs / 60 % 60, secs % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{secs:02}")
-    } else {
-        format!("{minutes}:{secs:02}")
-    }
+    format_time(duration.as_secs_f64(), 0, false)
 }
 
 fn close_button(ui: &mut egui::Ui) -> Option<ProgressAction> {
@@ -338,9 +333,6 @@ mod tests {
         assert_eq!(running_text(secs(42), 0.02), "0:42 elapsed");
         assert_eq!(running_text(secs(42), 0.3), "0:42 elapsed · ~2:20 total");
         assert_eq!(running_text(secs(0), 0.5), "0:00 elapsed · ~0:00 total");
-        assert_eq!(clock(secs(125)), "2:05");
-        assert_eq!(clock(Duration::from_millis(59_600)), "1:00");
-        assert_eq!(clock(secs(3725)), "1:02:05");
     }
 
     #[test]
