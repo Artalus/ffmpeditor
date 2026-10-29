@@ -1,11 +1,13 @@
 //! Source media inspection: probing, timeline thumbnails, waveforms.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, bail};
 use serde::Deserialize;
 
 use crate::ffmpeg::{self, Ffmpeg};
+use crate::model::SourceId;
 
 mod cache;
 #[cfg(test)]
@@ -14,6 +16,8 @@ mod thumbnails;
 mod waveform;
 
 pub use cache::MediaCache;
+
+pub type MediaInfos = HashMap<SourceId, MediaInfo>;
 
 /// Used when a stream reports no usable frame rate, so frame-step math never divides by zero.
 const FALLBACK_FPS: f64 = 30.0;

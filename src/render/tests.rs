@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::media::VideoInfo;
+use crate::media::{MediaInfo, MediaInfos, VideoInfo};
 use crate::model::{ClipId, Project, Span, Track};
 use crate::test_support::{ffmpeg, wait_until};
 

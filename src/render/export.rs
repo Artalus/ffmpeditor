@@ -5,10 +5,11 @@ use std::thread::{self, JoinHandle};
 
 use anyhow::Context;
 
+use super::ExportStatus;
 use super::graph::{self, FrameRate, Target};
 use super::process::{self, GraphFile};
-use super::{ExportStatus, MediaInfos};
 use crate::ffmpeg::{self, Ffmpeg};
+use crate::media::MediaInfos;
 use crate::model::{Project, Span};
 
 pub struct ExportJob {

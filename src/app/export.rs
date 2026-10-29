@@ -6,8 +6,9 @@ use egui::Context;
 
 use super::{App, Dialog};
 use crate::ffmpeg::Ffmpeg;
+use crate::media::MediaInfos;
 use crate::model::Project;
-use crate::render::{ExportJob, ExportStatus, MediaInfos, export_args};
+use crate::render::{ExportJob, ExportStatus, export_args};
 use crate::ui::export::{ExportDialog, ExportRequest, ProgressAction, default_output, progress};
 
 pub struct RunningExport {

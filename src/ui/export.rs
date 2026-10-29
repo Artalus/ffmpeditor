@@ -5,8 +5,9 @@ use std::time::Duration;
 use egui::{Align2, CollapsingHeader, Context, ProgressBar, ScrollArea, TextEdit};
 
 use crate::ffmpeg::Ffmpeg;
+use crate::media::MediaInfos;
 use crate::model::{Project, Span};
-use crate::render::{ExportStatus, MediaInfos, export_args};
+use crate::render::{ExportStatus, export_args};
 use crate::ui::dialogs::{Outcome, confirm_buttons, modal};
 use crate::ui::status_bar::format_time;
 

@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use super::{MediaInfo, Waveform, probe, thumbnails, waveform};
+use super::{MediaInfo, MediaInfos, Waveform, probe, thumbnails, waveform};
 use crate::ffmpeg::{Ffmpeg, Slot};
 use crate::model::SourceId;
 
@@ -16,7 +16,7 @@ const WORKERS: usize = 2;
 pub struct MediaCache {
     ctx: egui::Context,
     ffmpeg: Ffmpeg,
-    infos: HashMap<SourceId, MediaInfo>,
+    infos: MediaInfos,
     sources: HashMap<SourceId, SourceState>,
     /// Each `add` takes a fresh ticket; results carrying an older one for the same source are stale.
     next_ticket: u64,
@@ -146,7 +146,7 @@ impl MediaCache {
         self.infos.get(&id)
     }
 
-    pub fn infos(&self) -> &HashMap<SourceId, MediaInfo> {
+    pub fn infos(&self) -> &MediaInfos {
         &self.infos
     }
 

@@ -6,8 +6,9 @@ use std::thread;
 use anyhow::Context;
 
 use super::graph::{self, FrameRate, Target};
-use super::{MediaInfos, process};
+use super::process;
 use crate::ffmpeg::{Ffmpeg, Slot};
+use crate::media::MediaInfos;
 use crate::model::{Project, Span};
 
 const MAX_PREVIEW_SIZE: (u32, u32) = (960, 540);

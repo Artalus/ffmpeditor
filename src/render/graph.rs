@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::Path;
 
-use super::MediaInfos;
+use crate::media::MediaInfos;
 use crate::model::{Clip, Project, Span};
 
 const SAMPLE_RATE: u32 = 48_000;
