@@ -5,11 +5,12 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 ## modules
 - `model` — project data: settings, sources, clips; pure edit ops (append, move, split, trim, overlaps). saved as TOML.
 - `config` — app config (ffmpeg path) in OS config dir (`%APPDATA%\ffmpeditor\config\config.toml`).
-- `ffmpeg` — binary locations, `Command` builders (no console window on windows).
+- `ffmpeg` — binary locations, `Command` builders (no console window on windows), stderr/failure helpers, `Slot` for killable processes.
 - `media` — ffprobe → `MediaInfo`; background thumbnail + waveform extraction; `MediaCache` holds results/textures.
 - `render` — project → ffmpeg filter graph. export job with progress/cancel. previewer renders still frame at playhead.
 - `ui::timeline` — timeline widget: ruler, tracks, clips, drag/trim, playhead, range selection.
 - `app` — window shell: menus, dialogs, shortcuts, undo, wiring.
+- `test_support` — tests only: real-ffmpeg runner, cached media fixtures under `target/test-fixtures`, polling helper.
 
 ## model
 - time = `f64` seconds everywhere.
@@ -21,10 +22,15 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 
 ## render
 - one ffmpeg input per clip, input-seeked (`-ss`/`-t`), so cost scales with rendered range, not source length.
+- range is snapped to the project frame grid; fps is an exact rational (`30000/1001`), so NTSC stays on ffmpeg's own grid.
 - video: black canvas, clips overlaid in track/start order; fades are alpha fades (fade from black or crossfade over clip below).
-- audio: per-clip fades/mutes/volume, delayed to position, `amix` with silence base.
+- `fps=..:start_time` pads a clip's first slot with its first source frame; without it a cut flashes black.
+- audio: per-clip fades/mutes/volume, `aresample async` aligns streams starting after the seek point, `adelay` places the clip sample-exact, `amix` with silence base.
 - fades evaluated in absolute timeline time, so exporting a sub-range keeps partial fades exact.
-- preview frame = same graph over a one-frame range, PNG to stdout.
+- preview frame = same graph over a one-frame range, built at reduced size (fits 960x540), PNG to stdout.
+- previewer: newest request wins, a request with the same args as the last is skipped; ffmpeg in flight is killed on drop.
+- graphs too long for the command line go through `-/filter_complex <file>`.
+- cancelling an export kills ffmpeg and deletes the partial output.
 
 ## project file example
 ```toml
