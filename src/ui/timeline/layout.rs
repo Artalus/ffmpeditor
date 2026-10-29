@@ -1,8 +1,8 @@
 //! Pure timeline geometry: time <-> x mapping, track rows, ruler ticks.
 
-use egui::{Pos2, Rect};
+use egui::{Pos2, Rect, pos2};
 
-use crate::model::{Project, Track};
+use crate::model::{Clip, Project, Span, Track};
 
 pub const HEADER_WIDTH: f32 = 70.0;
 pub const RULER_HEIGHT: f32 = 24.0;
@@ -18,6 +18,15 @@ const TICK_STEPS: [f64; 22] = [
     0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
     900.0, 1800.0, 3600.0, 7200.0, 18000.0, 36000.0,
 ];
+
+/// Screen regions of the widget: ruler on top, track names on the left, rows below the ruler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Areas {
+    pub corner: Rect,
+    pub ruler: Rect,
+    pub header: Rect,
+    pub rows: Rect,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimeAxis {
@@ -62,6 +71,23 @@ pub struct View {
 pub struct Ticks {
     pub major: f64,
     pub minor: f64,
+}
+
+impl Areas {
+    pub fn new(rect: Rect) -> Self {
+        let left = (rect.left() + HEADER_WIDTH).min(rect.right());
+        let top = (rect.top() + RULER_HEIGHT).min(rect.bottom());
+        Self {
+            corner: Rect::from_min_max(rect.min, pos2(left, top)),
+            ruler: Rect::from_min_max(pos2(left, rect.top()), pos2(rect.right(), top)),
+            header: Rect::from_min_max(pos2(rect.left(), top), pos2(left, rect.bottom())),
+            rows: Rect::from_min_max(pos2(left, top), rect.max),
+        }
+    }
+
+    pub fn all(&self) -> Rect {
+        self.corner.union(self.rows)
+    }
 }
 
 impl TimeAxis {
@@ -201,6 +227,31 @@ impl View {
             self.axis.time(self.rows.right()),
         )
     }
+
+    /// Clips on `track` within view, in draw order (later on top).
+    pub fn visible_clips<'p>(&self, project: &'p Project, track: Track) -> Vec<&'p Clip> {
+        let (start, end) = self.visible_time();
+        let mut clips: Vec<_> = project
+            .clips_on(track)
+            .filter(|c| c.end() >= start && c.start <= end)
+            .collect();
+        clips.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.id.cmp(&b.id)));
+        clips
+    }
+}
+
+/// Overlapping parts of `clips` sorted by start; rendered as crossfades.
+pub fn crossfades(clips: &[&Clip]) -> Vec<Span> {
+    let mut spans = Vec::new();
+    for (i, a) in clips.iter().enumerate() {
+        for b in clips[i + 1..].iter().take_while(|b| b.start < a.end()) {
+            let span = Span::new(b.start, a.end().min(b.end()));
+            if !span.is_empty() {
+                spans.push(span);
+            }
+        }
+    }
+    spans
 }
 
 impl Ticks {
@@ -370,6 +421,54 @@ mod tests {
         assert_eq!(view.nearest_track(a2_y, false), Some(Track::Audio(1)));
         assert_eq!(view.nearest_track(-1000.0, true), Some(Track::Video(1)));
         assert_eq!(view.nearest_track(-1000.0, false), Some(Track::Audio(0)));
+    }
+
+    #[test]
+    fn visible_clips_are_culled_and_ordered() {
+        let mut project = project_with(&[Track::Video(0); 4]);
+        for (clip, start) in project.clips.iter_mut().zip([300.0, 50.0, -600.0, 50.0]) {
+            clip.start = start;
+            clip.duration = 100.0;
+        }
+        project.clips[3].id = ClipId(0);
+        project.clips[0].id = ClipId(3);
+        let ids: Vec<_> = view(TrackCounts { video: 1, audio: 1 })
+            .visible_clips(&project, Track::Video(0))
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, [ClipId(0), ClipId(1), ClipId(3)]);
+    }
+
+    #[test]
+    fn crossfades_between_overlapping_clips() {
+        let mut project = project_with(&[Track::Video(0); 3]);
+        for (clip, (start, duration)) in
+            project
+                .clips
+                .iter_mut()
+                .zip([(0.0, 10.0), (8.0, 1.0), (9.5, 5.0)])
+        {
+            clip.start = start;
+            clip.duration = duration;
+        }
+        let clips: Vec<_> = project.clips.iter().collect();
+        assert_eq!(
+            crossfades(&clips),
+            [Span::new(8.0, 9.0), Span::new(9.5, 10.0)]
+        );
+    }
+
+    #[test]
+    fn areas_split_widget() {
+        let areas = Areas::new(Rect::from_min_max(pos2(10.0, 20.0), pos2(510.0, 220.0)));
+        assert_eq!(
+            areas.rows.min,
+            pos2(10.0 + HEADER_WIDTH, 20.0 + RULER_HEIGHT)
+        );
+        assert_eq!(areas.ruler.x_range(), areas.rows.x_range());
+        assert_eq!(areas.header.y_range(), areas.rows.y_range());
+        assert_eq!(areas.all().max, pos2(510.0, 220.0));
     }
 
     #[test]
