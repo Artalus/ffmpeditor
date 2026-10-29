@@ -7,7 +7,7 @@ use anyhow::{Context, bail};
 use serde::Deserialize;
 
 use crate::ffmpeg::{self, Ffmpeg};
-use crate::model::SourceId;
+use crate::model::{SourceId, Track};
 
 mod cache;
 mod thumbnails;
@@ -59,6 +59,20 @@ pub fn probe(ffmpeg: &Ffmpeg, path: &Path) -> anyhow::Result<MediaInfo> {
         ));
     }
     parse_probe(&output.stdout).with_context(|| format!("probing {}", path.display()))
+}
+
+impl MediaInfo {
+    /// Track a freshly imported source goes to: video to V1 (bringing its audio along), audio-only to A1.
+    pub fn default_track(&self) -> anyhow::Result<Track> {
+        if self.duration <= 0.0 {
+            bail!("unknown duration");
+        }
+        match (&self.video, self.has_audio) {
+            (Some(_), _) => Ok(Track::Video(0)),
+            (None, true) => Ok(Track::Audio(0)),
+            (None, false) => bail!("no video or audio stream"),
+        }
+    }
 }
 
 impl Waveform {
@@ -164,7 +178,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::test_support::{self, fixtures};
+    use crate::test_support::{self, fixtures, media_info};
 
     /// `format.duration` is optional, like in real ffprobe output.
     fn parse(streams: Value, duration: Option<&str>) -> anyhow::Result<MediaInfo> {
@@ -250,6 +264,22 @@ mod tests {
 
         let error = probe(&ffmpeg, Path::new("missing.mp4")).unwrap_err();
         assert!(error.to_string().contains("not found"), "{error}");
+    }
+
+    #[test]
+    fn imported_media_goes_to_first_track_of_its_kind() {
+        let track = |video, audio| media_info(video, audio).default_track().unwrap();
+        assert_eq!(track(true, true), Track::Video(0));
+        assert_eq!(track(true, false), Track::Video(0));
+        assert_eq!(track(false, true), Track::Audio(0));
+    }
+
+    #[test]
+    fn unusable_media_has_no_track() {
+        assert!(media_info(false, false).default_track().is_err());
+        let mut info = media_info(true, true);
+        info.duration = 0.0;
+        assert!(info.default_track().is_err());
     }
 
     #[test]
