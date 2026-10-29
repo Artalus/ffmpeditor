@@ -1,4 +1,4 @@
-//! Spawning ffmpeg with possibly huge filter graphs and reading its output.
+//! Building ffmpeg commands for possibly huge filter graphs.
 
 use std::path::PathBuf;
 use std::process::Command;
