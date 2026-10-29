@@ -273,15 +273,13 @@ impl App {
 
     fn unsaved_changes(&mut self, ctx: &Context, action: Guarded) {
         let name = display_name(self.project_path.as_deref());
-        let Some(choice) = ui::dialogs::unsaved_changes(ctx, &name) else {
-            return;
+        let proceed = match ui::dialogs::unsaved_changes(ctx, &name) {
+            Outcome::Open => return,
+            Outcome::Cancelled => false,
+            Outcome::Accepted(UnsavedChoice::Save) => self.save(),
+            Outcome::Accepted(UnsavedChoice::Discard) => true,
         };
         self.dialog = Dialog::None;
-        let proceed = match choice {
-            UnsavedChoice::Save => self.save(),
-            UnsavedChoice::Discard => true,
-            UnsavedChoice::Cancel => false,
-        };
         if proceed {
             self.perform(action, ctx);
         }

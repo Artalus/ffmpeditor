@@ -121,18 +121,13 @@ impl ProjectSettingsDialog {
                     "Most codecs need even width and height.",
                 );
             }
-            let valid = !s.video_codec.trim().is_empty();
-            match confirm_buttons(ui, "OK", valid) {
-                Some(true) => {
-                    // Codecs reach ffmpeg verbatim, so stray spaces would break the command.
-                    for codec in [&mut s.video_codec, &mut s.audio_codec] {
-                        *codec = codec.trim().to_owned();
-                    }
-                    Outcome::Accepted(s.clone())
-                }
-                Some(false) => Outcome::Cancelled,
-                None => Outcome::Open,
-            }
+            // Codecs reach ffmpeg verbatim, so stray spaces would break the command.
+            let accepted = (!s.video_codec.trim().is_empty()).then(|| ProjectSettings {
+                video_codec: s.video_codec.trim().to_owned(),
+                audio_codec: s.audio_codec.trim().to_owned(),
+                ..s.clone()
+            });
+            confirm_buttons(ui, [("OK", accepted)])
         })
     }
 }

@@ -110,14 +110,7 @@ impl ExportDialog {
             if let Some(error) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
-            match confirm_buttons(ui, "Start", request.is_ok()) {
-                Some(true) => match request {
-                    Ok(request) => Outcome::Accepted(request),
-                    Err(_) => Outcome::Open,
-                },
-                Some(false) => Outcome::Cancelled,
-                None => Outcome::Open,
-            }
+            confirm_buttons(ui, [("Start", request.ok())])
         })
     }
 
