@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Modules land ahead of the code using them; drop once everything is wired up.
+#![allow(dead_code, unused_variables)]
+
+mod model;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions::default();
