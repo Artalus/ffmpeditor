@@ -1,16 +1,12 @@
 use std::collections::HashMap;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::{Context, bail};
-
 use super::{MediaInfo, Waveform, probe, thumbnails, waveform};
-use crate::ffmpeg::{self, Ffmpeg};
+use crate::ffmpeg::{Ffmpeg, Slot};
 use crate::model::SourceId;
 
 /// Importing many files at once must not start an ffmpeg per file.
@@ -51,7 +47,7 @@ struct Workers {
     /// Jobs with lower tickets were cleared: workers skip them and their processes get killed.
     first_live_ticket: AtomicU64,
     /// The ffmpeg each worker is running, reachable from the UI thread to kill it.
-    running: [Mutex<Option<Child>>; WORKERS],
+    running: [Slot; WORKERS],
 }
 
 struct Job {
@@ -296,10 +292,11 @@ impl Workers {
                     self.ctx.request_repaint();
                 }
             };
+            let live = || self.is_live(job.ticket);
             let result = match job.kind {
                 JobKind::Thumbnails(layout) => {
                     let cmd = thumbnails::command(&job.ffmpeg, &job.path, &layout);
-                    self.run_ffmpeg(slot, job.ticket, cmd, |rgba| {
+                    self.running[slot].run(live, cmd, |rgba| {
                         thumbnails::read_frames(rgba, &layout, |frame| {
                             send(Payload::Thumbnail(frame))
                         })
@@ -307,7 +304,7 @@ impl Workers {
                 }
                 JobKind::Waveform => {
                     let cmd = waveform::command(&job.ffmpeg, &job.path);
-                    self.run_ffmpeg(slot, job.ticket, cmd, |pcm| {
+                    self.running[slot].run(live, cmd, |pcm| {
                         waveform::read_peaks(pcm, |peaks| send(Payload::Peaks(peaks)))
                     })
                 }
@@ -316,65 +313,19 @@ impl Workers {
         }
     }
 
-    /// Runs `cmd` in the worker's slot so `cancel_before` can kill it, feeding its stdout to `read`.
-    fn run_ffmpeg(
-        &self,
-        slot: usize,
-        ticket: u64,
-        mut cmd: Command,
-        read: impl FnOnce(ChildStdout) -> io::Result<()>,
-    ) -> anyhow::Result<()> {
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let (stdout, stderr) = {
-            let mut running = lock(&self.running[slot]);
-            // Checked under the slot lock: a concurrent `cancel_before` either kills this child
-            // or has already marked the ticket stale.
-            if !self.is_live(ticket) {
-                bail!("cancelled");
-            }
-            let program = Path::new(cmd.get_program()).display().to_string();
-            let mut child = cmd.spawn().with_context(|| format!("running {program}"))?;
-            let stdout = child.stdout.take().expect("stdout is piped");
-            let stderr = child.stderr.take().expect("stderr is piped");
-            *running = Some(child);
-            (stdout, stderr)
-        };
-        // Drained concurrently, or a chatty ffmpeg blocks on a full stderr pipe.
-        let stderr = thread::spawn(move || ffmpeg::stderr_tail(stderr));
-        let read = read(stdout);
-        let mut child = lock(&self.running[slot]).take().expect("parked above");
-        let status = child.wait()?;
-        let stderr = stderr.join().unwrap_or_default();
-        read.context("reading ffmpeg output")?;
-        if !status.success() {
-            bail!(ffmpeg::failure(status, &stderr));
-        }
-        Ok(())
-    }
-
     fn is_live(&self, ticket: u64) -> bool {
         ticket >= self.first_live_ticket.load(Ordering::SeqCst)
     }
 
     fn cancel_before(&self, ticket: u64) {
         self.first_live_ticket.fetch_max(ticket, Ordering::SeqCst);
-        for slot in &self.running {
-            if let Some(child) = lock(slot).as_mut() {
-                // Errors only if it already exited; the worker reaps it either way.
-                let _ = child.kill();
-            }
-        }
+        self.running.iter().for_each(Slot::kill);
     }
 }
 
 /// Separate function so the queue lock is released before the job runs.
 fn next_job(jobs: &Mutex<Receiver<Job>>) -> Option<Job> {
-    lock(jobs).recv().ok()
-}
-
-/// A worker panicking mid-job must not take the UI thread down with it.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    jobs.lock().unwrap().recv().ok()
 }
 
 #[cfg(test)]
@@ -450,32 +401,5 @@ mod tests {
         assert!(cache.thumbnail(id, 0.0).is_none());
         let peaks = cache.waveform(id).unwrap().peaks.len();
         assert!(peaks <= 210, "stale peaks leaked in: {peaks}");
-    }
-
-    #[test]
-    fn cancel_kills_running_ffmpeg() {
-        let workers = Arc::new(Workers::new(egui::Context::default()));
-        let endless = || {
-            let mut cmd = test_support::ffmpeg().ffmpeg();
-            cmd.args([
-                "-v", "error", "-f", "lavfi", "-i", "sine", "-f", "s16le", "-",
-            ]);
-            cmd
-        };
-        let running = {
-            let workers = workers.clone();
-            thread::spawn(move || {
-                workers.run_ffmpeg(0, 0, endless(), |mut pcm| {
-                    io::copy(&mut pcm, &mut io::sink()).map(drop)
-                })
-            })
-        };
-        wait_until(30, || lock(&workers.running[0]).is_some());
-        workers.cancel_before(1);
-        assert!(running.join().unwrap().is_err());
-        assert!(lock(&workers.running[0]).is_none());
-
-        assert!(workers.run_ffmpeg(1, 0, endless(), |_| Ok(())).is_err());
-        assert!(lock(&workers.running[1]).is_none());
     }
 }

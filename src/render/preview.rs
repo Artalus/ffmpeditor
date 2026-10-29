@@ -1,12 +1,13 @@
+use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 
 use super::graph::{self, FrameRate, Target};
 use super::{MediaInfos, process};
-use crate::ffmpeg::{self, Ffmpeg};
+use crate::ffmpeg::{Ffmpeg, Slot};
 use crate::model::{Project, Span};
 
 const MAX_PREVIEW_SIZE: (u32, u32) = (960, 540);
@@ -32,6 +33,8 @@ struct Request {
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    /// Killed on drop, so no ffmpeg outlives the previewer.
+    running: Slot,
 }
 
 #[derive(Default)]
@@ -154,6 +157,7 @@ impl Drop for Previewer {
     fn drop(&mut self) {
         self.shared.state.lock().unwrap().closed = true;
         self.shared.wake.notify_one();
+        self.shared.running.kill();
     }
 }
 
@@ -163,7 +167,7 @@ fn render_loop(
     ctx: &egui::Context,
 ) {
     while let Some(request) = shared.next_request() {
-        let frame = render(&request).map_err(|e| format!("{e:#}"));
+        let frame = render(shared, &request).map_err(|e| format!("{e:#}"));
         let delivered = frames.send(frame).is_ok();
         shared.state.lock().unwrap().rendering = false;
         if !delivered {
@@ -173,18 +177,17 @@ fn render_loop(
     }
 }
 
-fn render(request: &Request) -> anyhow::Result<egui::ColorImage> {
-    let (mut cmd, _graph_file) = process::command(&request.ffmpeg, &request.args)?;
-    let output = cmd
-        .output()
-        .with_context(|| format!("running {}", request.ffmpeg.ffmpeg.display()))?;
-    if !output.status.success() {
-        bail!(ffmpeg::failure(
-            output.status,
-            &String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let image = image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+fn render(shared: &Shared, request: &Request) -> anyhow::Result<egui::ColorImage> {
+    let (cmd, _graph_file) = process::command(&request.ffmpeg, &request.args)?;
+    let png = shared.running.run(
+        || !shared.state.lock().unwrap().closed,
+        cmd,
+        |mut stdout| {
+            let mut png = Vec::new();
+            stdout.read_to_end(&mut png).map(|_| png)
+        },
+    )?;
+    let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
         .context("decoding preview frame")?
         .into_rgba8();
     let size = [image.width() as usize, image.height() as usize];
