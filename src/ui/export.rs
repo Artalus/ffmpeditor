@@ -221,7 +221,12 @@ fn pick_output(current: &Path, format: &str) -> Option<PathBuf> {
     if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
         dialog = dialog.set_directory(dir);
     }
-    dialog.save_file()
+    let mut path = dialog.save_file()?;
+    // Not every platform's dialog appends the filter's extension to a bare name.
+    if path.extension().is_none() {
+        path.set_extension(format);
+    }
+    Some(path)
 }
 
 fn resolve_range(

@@ -47,7 +47,7 @@ impl App {
             .map_or("project.toml".to_owned(), |name| {
                 name.to_string_lossy().into_owned()
             });
-        let Some(path) = self
+        let Some(mut path) = self
             .file_dialog()
             .add_filter("ffmpeditor project", PROJECT_EXTENSIONS)
             .set_file_name(name)
@@ -55,6 +55,10 @@ impl App {
         else {
             return false;
         };
+        // Not every platform's dialog appends the filter's extension to a bare name.
+        if path.extension().is_none() {
+            path.set_extension(PROJECT_EXTENSIONS[0]);
+        }
         self.save_to(path)
     }
 
