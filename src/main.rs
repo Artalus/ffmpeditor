@@ -2,6 +2,7 @@
 // Modules land ahead of the code using them; drop once everything is wired up.
 #![allow(dead_code, unused_variables)]
 
+mod config;
 mod model;
 
 fn main() -> eframe::Result {
