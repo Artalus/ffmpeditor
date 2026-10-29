@@ -140,11 +140,10 @@ fn thumbnails(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
     if tile < 1.0 {
         return;
     }
-    let visible = painter.clip_rect().x_range();
-    let end = visible.max.min(rect.right());
-    let first = ((visible.min - rect.left()) / tile).floor().max(0.0);
+    let visible = visible_span(painter, rect);
+    let first = ((visible.min - rect.left()) / tile).floor();
     let mut x = rect.left() + first * tile;
-    while x < end {
+    while x < visible.max {
         let at = clip
             .timeline_to_source(scene.view.axis.time(x))
             .clamp(clip.source_in, clip.source_out());
@@ -165,11 +164,10 @@ fn waveform(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
     let axis = &scene.view.axis;
     let half = rect.height() / 2.0 - 2.0;
     let gain = clip.audio.volume as f32;
-    let visible = painter.clip_rect().x_range();
-    let end = visible.max.min(rect.right());
+    let visible = visible_span(painter, rect);
     let mut mesh = Mesh::default();
-    let mut x = visible.min.max(rect.left()).floor();
-    while x < end {
+    let mut x = visible.min.floor();
+    while x < visible.max {
         let from = clip.timeline_to_source(axis.time(x));
         let to = clip.timeline_to_source(axis.time(x + 1.0));
         let muted = clip.audio.muted || clip.audio.mute_regions.iter().any(|r| r.contains(from));
@@ -179,6 +177,11 @@ fn waveform(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
         x += 1.0;
     }
     painter.add(Shape::mesh(mesh));
+}
+
+/// Horizontal part of `rect` the painter shows.
+fn visible_span(painter: &Painter, rect: Rect) -> Rangef {
+    painter.clip_rect().x_range().intersection(rect.x_range())
 }
 
 fn mute_regions(painter: &Painter, axis: &TimeAxis, rect: Rect, clip: &Clip) {
