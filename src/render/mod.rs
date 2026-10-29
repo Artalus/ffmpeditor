@@ -7,11 +7,8 @@ mod process;
 #[cfg(test)]
 mod tests;
 
-// Unused until the app shell is wired up.
-#[allow(unused_imports)]
 pub use export::{ExportJob, export_args};
-#[allow(unused_imports)]
-pub use preview::{Previewer, preview_args};
+pub use preview::Previewer;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExportStatus {
