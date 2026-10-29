@@ -2,10 +2,32 @@
 # See https://prek.j178.dev for more information.
 #:schema https://www.schemastore.org/prek.json
 
+default_install_hook_types = ["pre-commit", "pre-merge-commit"]
+default_stages = ["pre-commit"]
+
 [[repos]]
 repo = "builtin"
 hooks = [
     { id = "trailing-whitespace" },
     { id = "end-of-file-fixer" },
     { id = "check-added-large-files" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "cargo-fmt", name = "cargo fmt", language = "system", entry = "cargo fmt --", types = ["rust"] },
+]
+
+[[repos]]
+repo = "https://github.com/Artalus/pre-commit-clippy-fix"
+rev = "v0.1"
+hooks = [
+    { id = "clippy-fix", args = ["--all-targets", "--", "-D", "warnings"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "cargo-test", name = "cargo test", language = "system", entry = "cargo test", pass_filenames = false, always_run = true, stages = ["pre-merge-commit"] },
 ]
