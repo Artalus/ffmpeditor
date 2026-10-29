@@ -1,3 +1,5 @@
+mod layout;
+
 use crate::media::MediaCache;
 use crate::model::{ClipId, Project, Span};
 
