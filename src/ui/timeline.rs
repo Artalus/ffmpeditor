@@ -1,3 +1,4 @@
+mod edit;
 mod layout;
 
 use crate::media::MediaCache;
