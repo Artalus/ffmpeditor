@@ -2,11 +2,7 @@
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions::default();
-    eframe::run_native(
-        "ffmpeditor",
-        options,
-        Box::new(|_cc| Ok(Box::new(App))),
-    )
+    eframe::run_native("ffmpeditor", options, Box::new(|_cc| Ok(Box::new(App))))
 }
 
 struct App;
