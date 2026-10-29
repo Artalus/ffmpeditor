@@ -9,6 +9,7 @@ pub enum Command {
     Save,
     SaveAs,
     Import,
+    Export,
     Quit,
     Undo,
     Redo,
@@ -27,6 +28,7 @@ pub struct MenuState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub clip_selected: bool,
+    pub export_running: bool,
 }
 
 /// The first shortcut of a command is the one shown in menus.
@@ -36,6 +38,7 @@ const BINDINGS: &[(Command, &[KeyboardShortcut])] = &[
     (Command::Save, &[ctrl(Key::S)]),
     (Command::SaveAs, &[ctrl_shift(Key::S)]),
     (Command::Import, &[ctrl(Key::I)]),
+    (Command::Export, &[ctrl(Key::E)]),
     (Command::Undo, &[ctrl(Key::Z)]),
     (Command::Redo, &[ctrl(Key::Y), ctrl_shift(Key::Z)]),
     (Command::Split, &[plain(Key::S)]),
@@ -71,6 +74,7 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
                 item(ui, &mut command, Command::SaveAs, true);
                 ui.separator();
                 item(ui, &mut command, Command::Import, true);
+                item(ui, &mut command, Command::Export, !state.export_running);
                 ui.separator();
                 item(ui, &mut command, Command::Quit, true);
             });
@@ -150,6 +154,7 @@ impl Command {
             Command::Save => "Save",
             Command::SaveAs => "Save as…",
             Command::Import => "Import media…",
+            Command::Export => "Export…",
             Command::Quit => "Quit",
             Command::Undo => "Undo",
             Command::Redo => "Redo",

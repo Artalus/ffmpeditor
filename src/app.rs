@@ -1,5 +1,6 @@
 mod commands;
 mod editing;
+mod export;
 mod files;
 mod history;
 
@@ -14,10 +15,12 @@ use crate::model::Project;
 use crate::render::Previewer;
 use crate::ui;
 use crate::ui::dialogs::{Outcome, SettingsDialog, UnsavedChoice};
+use crate::ui::export::ExportDialog;
 use crate::ui::project_settings::ProjectSettingsDialog;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
 use editing::{split_targets, step_frames};
+use export::{RunningExport, start_export};
 use history::History;
 
 pub struct App {
@@ -35,6 +38,9 @@ pub struct App {
     /// The timeline was mid-gesture last frame; shortcuts would act on a half-finished edit.
     timeline_busy: bool,
     timeline: TimelineState,
+    /// Kept after the job ends so its result stays visible until dismissed.
+    export: Option<RunningExport>,
+    last_export: Option<PathBuf>,
     dialog: Dialog,
     /// The user already agreed to drop unsaved changes, so the next close request goes through.
     quit_confirmed: bool,
@@ -49,6 +55,7 @@ enum Dialog {
     Unsaved(Guarded),
     Settings(SettingsDialog),
     ProjectSettings(ProjectSettingsDialog),
+    Export(ExportDialog),
 }
 
 /// Actions that would drop unsaved changes.
@@ -83,6 +90,8 @@ impl App {
             ffmpeg_status,
             timeline_busy: false,
             timeline: TimelineState::default(),
+            export: None,
+            last_export: None,
             dialog: Dialog::None,
             quit_confirmed: false,
             errors,
@@ -105,6 +114,7 @@ impl eframe::App for App {
         self.viewer(ui);
         self.settle(&timeline);
         self.dialogs(ui.ctx());
+        self.export_progress(ui.ctx());
         ui::dialogs::errors(ui.ctx(), &mut self.errors);
         self.update_title(ui.ctx());
     }
@@ -113,6 +123,11 @@ impl eframe::App for App {
 impl App {
     fn handle_close_request(&mut self, ctx: &Context) {
         if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        if self.export_running() {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.report("An export is running; cancel it before quitting.".to_owned());
             return;
         }
         if self.quit_confirmed || !self.is_dirty() {
@@ -135,6 +150,7 @@ impl App {
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
             clip_selected: self.timeline.selected_clip.is_some(),
+            export_running: self.export_running(),
         };
         commands.extend(commands::menu_bar(ui, &state));
         commands
@@ -154,6 +170,7 @@ impl App {
                 self.save_as();
             }
             Command::Import => self.import(),
+            Command::Export => self.open_export_dialog(),
             // Goes through handle_close_request, which owns the unsaved-changes check.
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
             Command::Undo => {
@@ -214,7 +231,7 @@ impl App {
             duration: self.project.duration(),
             selection: self.timeline.selection,
             ffmpeg: &self.ffmpeg_status,
-            export_progress: None,
+            export_progress: self.export_fraction(),
         };
         egui::Panel::bottom("status").show(ui, |ui| ui::status_bar::show(ui, &status));
     }
@@ -286,6 +303,25 @@ impl App {
                     self.project.settings = settings;
                 }
             },
+            Dialog::Export(dialog) => {
+                let selection = self.timeline.selection;
+                let infos = self.media.infos();
+                match dialog.show(ctx, &self.project, infos, &self.ffmpeg, selection) {
+                    Outcome::Open => {}
+                    Outcome::Cancelled => self.dialog = Dialog::None,
+                    Outcome::Accepted(request) => {
+                        let output = request.output.clone();
+                        match start_export(&self.ffmpeg, &self.project, infos, request) {
+                            Ok(export) => {
+                                self.dialog = Dialog::None;
+                                self.export = Some(export);
+                                self.last_export = Some(output);
+                            }
+                            Err(err) => dialog.set_error(format!("{err:#}")),
+                        }
+                    }
+                }
+            }
         }
     }
 

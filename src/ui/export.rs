@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use egui::{Align2, CollapsingHeader, Context, ProgressBar, ScrollArea, TextEdit};
 
@@ -30,6 +31,7 @@ pub struct ExportRequest {
 pub enum ProgressAction {
     Cancel,
     Close,
+    ShowFile,
 }
 
 impl ExportDialog {
@@ -136,23 +138,37 @@ impl ExportDialog {
 }
 
 /// Progress of a running export, then its result until closed.
-pub fn progress(ctx: &Context, status: &ExportStatus, output: &Path) -> Option<ProgressAction> {
+pub fn progress(
+    ctx: &Context,
+    status: &ExportStatus,
+    output: &Path,
+    elapsed: Duration,
+) -> Option<ProgressAction> {
     egui::Window::new("Export progress")
         .anchor(Align2::CENTER_TOP, [0.0, 48.0])
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
             ui.set_min_width(360.0);
-            ui.label(output.display().to_string());
-            match status {
+            let path = output.display().to_string();
+            let show_file = if matches!(status, ExportStatus::Finished) {
+                ui.link(path)
+                    .on_hover_text("Show in file manager")
+                    .clicked()
+            } else {
+                ui.label(path);
+                false
+            };
+            let action = match status {
                 ExportStatus::Running { progress } => {
                     ui.add(ProgressBar::new(*progress).show_percentage().animate(true));
+                    ui.label(running_text(elapsed, *progress));
                     ui.button("Cancel")
                         .clicked()
                         .then_some(ProgressAction::Cancel)
                 }
                 ExportStatus::Finished => {
-                    ui.label("Finished.");
+                    ui.label(format!("Exported in {}", clock(elapsed)));
                     close_button(ui)
                 }
                 ExportStatus::Cancelled => {
@@ -170,7 +186,8 @@ pub fn progress(ctx: &Context, status: &ExportStatus, output: &Path) -> Option<P
                     });
                     close_button(ui)
                 }
-            }
+            };
+            show_file.then_some(ProgressAction::ShowFile).or(action)
         })
         .and_then(|response| response.inner.flatten())
 }
@@ -234,6 +251,26 @@ fn command_line(cmd: &Command) -> String {
         .join(" ")
 }
 
+/// The total is left out until there is enough progress to extrapolate from.
+fn running_text(elapsed: Duration, progress: f32) -> String {
+    let mut text = format!("{} elapsed", clock(elapsed));
+    if progress > 0.02 {
+        text += &format!(" · ~{} total", clock(elapsed.div_f32(progress)));
+    }
+    text
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour on.
+fn clock(duration: Duration) -> String {
+    let secs = duration.as_secs_f64().round() as u64;
+    let (hours, minutes, secs) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes}:{secs:02}")
+    }
+}
+
 fn close_button(ui: &mut egui::Ui) -> Option<ProgressAction> {
     ui.button("Close")
         .clicked()
@@ -293,6 +330,18 @@ mod tests {
         assert!(resolve_range(Range::Selection, 10.0, None).is_err());
         assert!(resolve_range(Range::Timeline, 0.0, None).is_err());
         assert!(resolve_range(Range::Selection, 10.0, Some(Span::new(3.0, 3.0))).is_err());
+    }
+
+    #[test]
+    fn elapsed_and_estimated_total() {
+        let secs = Duration::from_secs;
+        assert_eq!(running_text(secs(42), 0.0), "0:42 elapsed");
+        assert_eq!(running_text(secs(42), 0.02), "0:42 elapsed");
+        assert_eq!(running_text(secs(42), 0.3), "0:42 elapsed · ~2:20 total");
+        assert_eq!(running_text(secs(0), 0.5), "0:00 elapsed · ~0:00 total");
+        assert_eq!(clock(secs(125)), "2:05");
+        assert_eq!(clock(Duration::from_millis(59_600)), "1:00");
+        assert_eq!(clock(secs(3725)), "1:02:05");
     }
 
     #[test]

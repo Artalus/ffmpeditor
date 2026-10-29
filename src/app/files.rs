@@ -98,6 +98,7 @@ impl App {
         self.project = project;
         self.project_path = path;
         self.timeline = TimelineState::default();
+        self.last_export = None;
         self.probe_sources();
     }
 
