@@ -54,6 +54,7 @@ fn peaks(pcm: &[u8]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::test_media::{self, TestMedia};
 
     fn pcm(samples: &[i16]) -> Vec<u8> {
         samples.iter().flat_map(|s| s.to_le_bytes()).collect()
@@ -79,5 +80,24 @@ mod tests {
         let mut batches = 0;
         read_peaks(io::empty(), |_| batches += 1).unwrap();
         assert_eq!(batches, 0);
+    }
+
+    #[test]
+    fn peaks_of_a_tone() {
+        let media = TestMedia::new("waveform");
+        let output = command(&test_media::ffmpeg(), &media.audio_only())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let mut peaks = Vec::new();
+        read_peaks(output.stdout.as_slice(), |batch| peaks.extend(batch)).unwrap();
+        let expected = 2.0 * PEAKS_PER_SECOND;
+        assert!(
+            (peaks.len() as f64 - expected).abs() <= 2.0,
+            "{}",
+            peaks.len()
+        );
+        // lavfi's sine is at 1/8 of full scale.
+        assert!(peaks.iter().all(|&p| (0.1..0.15).contains(&p)), "{peaks:?}");
     }
 }

@@ -175,6 +175,7 @@ fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    use super::test_media::{self, TestMedia};
     use super::*;
 
     #[test]
@@ -263,6 +264,32 @@ mod tests {
         let no_duration = r#"{"streams": [{"codec_type": "audio"}], "format": {}}"#;
         assert!(parse_probe(no_duration.as_bytes()).is_err());
         assert!(parse_probe(b"not json").is_err());
+    }
+
+    #[test]
+    fn probe_generated_media() {
+        let media = TestMedia::new("probe");
+        let ffmpeg = test_media::ffmpeg();
+
+        let info = probe(&ffmpeg, &media.video_with_audio()).unwrap();
+        assert!((info.duration - 3.0).abs() < 0.1, "{info:?}");
+        assert!(info.has_audio);
+        let video = VideoInfo {
+            width: 320,
+            height: 240,
+            fps: 30.0,
+        };
+        assert_eq!(info.video, Some(video));
+
+        let info = probe(&ffmpeg, &media.audio_only()).unwrap();
+        assert!((info.duration - 2.0).abs() < 0.1, "{info:?}");
+        assert_eq!((info.video, info.has_audio), (None, true));
+
+        let info = probe(&ffmpeg, &media.video_only()).unwrap();
+        assert!(info.video.is_some() && !info.has_audio, "{info:?}");
+
+        let error = probe(&ffmpeg, &media.missing()).unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
     }
 
     #[test]
