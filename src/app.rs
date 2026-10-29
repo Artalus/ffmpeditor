@@ -1,3 +1,5 @@
+mod history;
+
 use crate::config::AppConfig;
 use crate::model::Project;
 
