@@ -50,22 +50,10 @@ pub fn build(project: &Project, infos: &MediaInfos, target: &Target) -> Graph {
     let layers = layers(project, infos, target, range);
     let inputs = layers.iter().flat_map(input_args).collect();
     let mut chains = vec![base_video(target, rate, range)];
-    chains.extend(
-        layers
-            .iter()
-            .enumerate()
-            .filter(|(_, layer)| layer.video)
-            .map(|(i, layer)| clip_video(i, layer, target, rate)),
-    );
+    chains.extend(video_layers(&layers).map(|(i, layer)| clip_video(i, layer, target, rate)));
     chains.push(overlays(&layers));
     if target.audio {
-        chains.extend(
-            layers
-                .iter()
-                .enumerate()
-                .filter(|(_, layer)| layer.audio)
-                .map(|(i, layer)| clip_audio(i, layer, range)),
-        );
+        chains.extend(audio_layers(&layers).map(|(i, layer)| clip_audio(i, layer, range)));
         chains.push(mix(&layers, range));
     }
     Graph {
@@ -114,6 +102,15 @@ fn layers<'a>(
     layers
 }
 
+/// Layers with their input index, which names their chains.
+fn video_layers<'a, 'b>(layers: &'a [Layer<'b>]) -> impl Iterator<Item = (usize, &'a Layer<'b>)> {
+    layers.iter().enumerate().filter(|(_, layer)| layer.video)
+}
+
+fn audio_layers<'a, 'b>(layers: &'a [Layer<'b>]) -> impl Iterator<Item = (usize, &'a Layer<'b>)> {
+    layers.iter().enumerate().filter(|(_, layer)| layer.audio)
+}
+
 fn input_args(layer: &Layer) -> [String; 6] {
     let t0 = layer.visible.start;
     [
@@ -157,7 +154,7 @@ fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> 
 fn overlays(layers: &[Layer]) -> String {
     let mut chain = String::new();
     let mut below = "base".to_owned();
-    for (i, _) in layers.iter().enumerate().filter(|(_, layer)| layer.video) {
+    for (i, _) in video_layers(layers) {
         chain += &format!("[{below}][v{i}]overlay=eof_action=pass[ov{i}];");
         below = format!("ov{i}");
     }
@@ -207,13 +204,10 @@ fn clip_audio(index: usize, layer: &Layer, range: Span) -> String {
 }
 
 fn mix(layers: &[Layer], range: Span) -> String {
-    let clips: String = layers
-        .iter()
-        .enumerate()
-        .filter(|(_, layer)| layer.audio)
+    let clips: String = audio_layers(layers)
         .map(|(i, _)| format!("[a{i}]"))
         .collect();
-    let inputs = 1 + layers.iter().filter(|layer| layer.audio).count();
+    let inputs = 1 + audio_layers(layers).count();
     format!(
         "anullsrc=r={SAMPLE_RATE}:cl=stereo,atrim=end_sample={n}[abase];\
          [abase]{clips}amix=inputs={inputs}:duration=first:normalize=0:dropout_transition=0[a]",
@@ -226,22 +220,20 @@ fn mix(layers: &[Layer], range: Span) -> String {
 fn fades(filter: &str, extra: &str, clip: &Clip, fade_in: f64, fade_out: f64) -> String {
     let fade_in = fade_in.clamp(0.0, clip.duration);
     let fade_out = fade_out.clamp(0.0, clip.duration);
-    let mut out = String::new();
-    if fade_in > 0.0 {
-        out += &format!(
-            ",{filter}=t=in:st={}:d={}{extra}",
-            secs(clip.start),
-            secs(fade_in)
-        );
-    }
-    if fade_out > 0.0 {
-        out += &format!(
-            ",{filter}=t=out:st={}:d={}{extra}",
-            secs(clip.end() - fade_out),
-            secs(fade_out)
-        );
-    }
-    out
+    [
+        ("in", clip.start, fade_in),
+        ("out", clip.end() - fade_out, fade_out),
+    ]
+    .into_iter()
+    .filter(|&(_, _, duration)| duration > 0.0)
+    .map(|(kind, start, duration)| {
+        format!(
+            ",{filter}=t={kind}:st={}:d={}{extra}",
+            secs(start),
+            secs(duration)
+        )
+    })
+    .collect()
 }
 
 fn secs(t: f64) -> String {
