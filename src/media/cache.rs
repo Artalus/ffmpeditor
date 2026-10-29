@@ -160,13 +160,9 @@ impl MediaCache {
         self.sources.get(&id)?.thumbnails.get(source_time)
     }
 
-    /// Grows while extraction runs, see `is_loading`.
+    /// Grows while extraction runs.
     pub fn waveform(&self, id: SourceId) -> Option<&Waveform> {
         self.sources.get(&id)?.waveform.as_ref()
-    }
-
-    pub fn is_loading(&self, id: SourceId) -> bool {
-        self.sources.get(&id).is_some_and(|s| s.running_jobs > 0)
     }
 
     /// Importing a file that is already loaded keeps its results; a failed one is retried.
@@ -333,10 +329,14 @@ mod tests {
         MediaCache::new(egui::Context::default(), test_support::ffmpeg())
     }
 
+    fn is_loading(cache: &MediaCache, id: SourceId) -> bool {
+        cache.sources.get(&id).is_some_and(|s| s.running_jobs > 0)
+    }
+
     fn wait_for_extraction(cache: &mut MediaCache, ids: &[SourceId]) {
         wait_until(30, || {
             cache.poll();
-            ids.iter().all(|&id| !cache.is_loading(id))
+            ids.iter().all(|&id| !is_loading(cache, id))
         });
     }
 
@@ -366,7 +366,7 @@ mod tests {
 
         let peaks = cache.waveform(both).unwrap().peaks.len();
         cache.add(both, &fx.testsrc).unwrap();
-        assert!(!cache.is_loading(both));
+        assert!(!is_loading(&cache, both));
         assert_eq!(cache.waveform(both).unwrap().peaks.len(), peaks);
     }
 
@@ -377,7 +377,7 @@ mod tests {
         assert!(cache.add(id, Path::new("missing.mp4")).is_err());
         assert!(cache.error(id).unwrap().contains("not found"));
         assert!(cache.info(id).is_none());
-        assert!(!cache.is_loading(id));
+        assert!(!is_loading(&cache, id));
     }
 
     #[test]
