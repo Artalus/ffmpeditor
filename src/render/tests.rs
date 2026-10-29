@@ -1,23 +1,16 @@
 //! Argument checks plus end-to-end runs against the real ffmpeg on PATH.
 
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::path::Path;
 
 use super::preview::preview_args;
 use super::*;
 use crate::media::{MediaInfo, MediaInfos, VideoInfo};
 use crate::model::{ClipId, Project, Span, Track};
-use crate::test_support::{ffmpeg, wait_until};
+use crate::test_support::{ffmpeg, fixtures, output_path, run_ok, wait_until};
 
 struct Timeline {
     project: Project,
     infos: MediaInfos,
-}
-
-struct Fixtures {
-    testsrc: PathBuf,
-    red_16x9: PathBuf,
-    blue_4x3: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -338,75 +331,6 @@ impl Timeline {
     }
 }
 
-/// Generated once per test run; stored under target/ so concurrent runs elsewhere don't collide.
-fn fixtures() -> &'static Fixtures {
-    static FIXTURES: OnceLock<Fixtures> = OnceLock::new();
-    FIXTURES.get_or_init(|| Fixtures {
-        testsrc: fixture(
-            "testsrc.mp4",
-            "testsrc2=size=320x240:rate=30:duration=3",
-            "sine=frequency=440:duration=3",
-        ),
-        red_16x9: fixture(
-            "red-16x9.mp4",
-            "color=c=red:size=320x180:rate=30:duration=3",
-            "sine=frequency=440:duration=3",
-        ),
-        blue_4x3: fixture(
-            "blue-4x3.mp4",
-            "color=c=blue:size=320x240:rate=30:duration=3",
-            "sine=frequency=880:duration=3",
-        ),
-    })
-}
-
-fn fixture(name: &str, video: &str, audio: &str) -> PathBuf {
-    let path = fixtures_dir().join(name);
-    if path.exists() {
-        return path;
-    }
-    let partial = fixtures_dir().join(format!("{}.{name}", std::process::id()));
-    let output = ffmpeg()
-        .ffmpeg()
-        .args([
-            "-loglevel",
-            "error",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            video,
-            "-f",
-            "lavfi",
-            "-i",
-            audio,
-        ])
-        .args(["-c:v", "libx264", "-c:a", "aac", "-shortest", "-f", "mp4"])
-        .arg(&partial)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    // Rename is atomic, so a concurrent run never sees a half-written fixture.
-    if std::fs::rename(&partial, &path).is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    path
-}
-
-fn fixtures_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/render-tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn output_path(name: &str) -> PathBuf {
-    fixtures_dir().join(format!("out-{}-{name}", std::process::id()))
-}
-
 /// Runs the export to the end.
 fn export(tl: &Timeline, range: Span, output: &Path) -> ExportStatus {
     let args = export_args(&tl.project, &tl.infos, range, output);
@@ -423,24 +347,19 @@ struct Stream {
 }
 
 fn probe_streams(path: &Path) -> Vec<Stream> {
-    let output = ffmpeg()
-        .ffprobe()
-        .args([
-            "-v",
-            "error",
-            "-count_frames",
-            "-of",
-            "json",
-            "-show_entries",
-        ])
-        .arg("stream=codec_type,duration,nb_read_frames")
-        .arg(path)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let output = run_ok(
+        ffmpeg()
+            .ffprobe()
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-of",
+                "json",
+                "-show_entries",
+            ])
+            .arg("stream=codec_type,duration,nb_read_frames")
+            .arg(path),
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     json["streams"]
@@ -462,19 +381,14 @@ const AUDIO_CHECK_RATE: u32 = 8000;
 
 /// Mono samples of the first audio stream at `AUDIO_CHECK_RATE`.
 fn audio_samples(path: &Path) -> Vec<i16> {
-    let output = ffmpeg()
-        .ffmpeg()
-        .args(["-loglevel", "error", "-i"])
-        .arg(path)
-        .args(["-map", "0:a:0", "-ac", "1", "-ar"])
-        .arg(AUDIO_CHECK_RATE.to_string())
-        .args(["-f", "s16le", "-"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let output = run_ok(
+        ffmpeg()
+            .ffmpeg()
+            .args(["-loglevel", "error", "-i"])
+            .arg(path)
+            .args(["-map", "0:a:0", "-ac", "1", "-ar"])
+            .arg(AUDIO_CHECK_RATE.to_string())
+            .args(["-f", "s16le", "-"]),
     );
     let (samples, _) = output.stdout.as_chunks::<2>();
     samples.iter().map(|&b| i16::from_le_bytes(b)).collect()
@@ -484,12 +398,7 @@ fn render_preview(tl: &Timeline, time: f64) -> image::RgbImage {
     let args = preview_args(&tl.project, &tl.infos, time);
     let (mut cmd, _file) =
         process::command(&ffmpeg(), &args, process::MAX_INLINE_COMMAND_LINE).unwrap();
-    let output = cmd.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = run_ok(&mut cmd);
     image::load_from_memory(&output.stdout).unwrap().into_rgb8()
 }
 

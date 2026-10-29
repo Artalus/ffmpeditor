@@ -84,8 +84,7 @@ pub fn read_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::TestMedia;
-    use crate::test_support;
+    use crate::test_support::{self, fixtures, run_ok};
 
     fn video(width: u32, height: u32) -> VideoInfo {
         VideoInfo {
@@ -145,12 +144,9 @@ mod tests {
 
     #[test]
     fn one_thumbnail_per_second_from_keyframes() {
-        let media = TestMedia::new("thumbnails");
         let layout = Layout::new(3.0, &video(320, 240));
-        let output = command(&test_support::ffmpeg(), &media.video_with_audio(), &layout)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        let cmd = &mut command(&test_support::ffmpeg(), &fixtures().testsrc, &layout);
+        let output = run_ok(cmd);
         let mut frames = Vec::new();
         read_frames(output.stdout.as_slice(), &layout, |frame| {
             frames.push(frame)

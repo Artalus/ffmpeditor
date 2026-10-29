@@ -327,8 +327,7 @@ fn next_job(jobs: &Mutex<Receiver<Job>>) -> Option<Job> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::TestMedia;
-    use crate::test_support::{self, wait_until};
+    use crate::test_support::{self, fixtures, wait_until};
 
     fn cache() -> MediaCache {
         MediaCache::new(egui::Context::default(), test_support::ffmpeg())
@@ -343,12 +342,12 @@ mod tests {
 
     #[test]
     fn extracts_thumbnails_and_waveforms_in_background() {
-        let media = TestMedia::new("cache");
+        let fx = fixtures();
         let mut cache = cache();
         let (both, video, audio) = (SourceId(1), SourceId(2), SourceId(3));
-        cache.add(both, &media.video_with_audio()).unwrap();
-        cache.add(video, &media.video_only()).unwrap();
-        cache.add(audio, &media.audio_only()).unwrap();
+        cache.add(both, &fx.testsrc).unwrap();
+        cache.add(video, &fx.video_only).unwrap();
+        cache.add(audio, &fx.audio_only).unwrap();
         wait_for_extraction(&mut cache, &[both, video, audio]);
 
         for id in [both, video, audio] {
@@ -366,17 +365,16 @@ mod tests {
         assert!(cache.waveform(video).is_none());
 
         let peaks = cache.waveform(both).unwrap().peaks.len();
-        cache.add(both, &media.video_with_audio()).unwrap();
+        cache.add(both, &fx.testsrc).unwrap();
         assert!(!cache.is_loading(both));
         assert_eq!(cache.waveform(both).unwrap().peaks.len(), peaks);
     }
 
     #[test]
     fn probe_failure_is_reported() {
-        let media = TestMedia::new("cache-missing");
         let mut cache = cache();
         let id = SourceId(1);
-        assert!(cache.add(id, &media.missing()).is_err());
+        assert!(cache.add(id, Path::new("missing.mp4")).is_err());
         assert!(cache.error(id).unwrap().contains("not found"));
         assert!(cache.info(id).is_none());
         assert!(!cache.is_loading(id));
@@ -384,14 +382,14 @@ mod tests {
 
     #[test]
     fn clear_discards_results_of_running_jobs() {
-        let media = TestMedia::new("cache-clear");
+        let fx = fixtures();
         let mut cache = cache();
         let id = SourceId(1);
-        cache.add(id, &media.video_with_audio()).unwrap();
+        cache.add(id, &fx.testsrc).unwrap();
         cache.clear();
         assert!(cache.infos().is_empty());
 
-        cache.add(id, &media.audio_only()).unwrap();
+        cache.add(id, &fx.audio_only).unwrap();
         wait_for_extraction(&mut cache, &[id]);
         assert_eq!(cache.error(id), None);
         assert!(cache.thumbnail(id, 0.0).is_none());

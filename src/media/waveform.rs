@@ -57,8 +57,7 @@ fn peaks(pcm: &[u8]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::TestMedia;
-    use crate::test_support;
+    use crate::test_support::{self, fixtures, run_ok};
 
     fn pcm(samples: &[i16]) -> Vec<u8> {
         samples.iter().flat_map(|s| s.to_le_bytes()).collect()
@@ -88,11 +87,8 @@ mod tests {
 
     #[test]
     fn peaks_of_a_tone() {
-        let media = TestMedia::new("waveform");
-        let output = command(&test_support::ffmpeg(), &media.audio_only())
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        let cmd = &mut command(&test_support::ffmpeg(), &fixtures().audio_only);
+        let output = run_ok(cmd);
         let mut peaks = Vec::new();
         read_peaks(output.stdout.as_slice(), |batch| peaks.extend(batch)).unwrap();
         let expected = 2.0 * PEAKS_PER_SECOND;
