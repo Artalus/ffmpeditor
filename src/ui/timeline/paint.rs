@@ -43,12 +43,11 @@ pub fn timeline(painter: &Painter, scene: &Scene) {
     lanes(&painter.with_clip_rect(areas.rows), scene);
     scrollbar(painter, scene);
     header(&painter.with_clip_rect(areas.header), scene);
-    ruler(&painter.with_clip_rect(areas.ruler), scene);
+    let selection = selection_x(scene);
+    ruler(&painter.with_clip_rect(areas.ruler), scene, selection);
     corner(&painter.with_clip_rect(areas.corner), scene);
-    markers(
-        &painter.with_clip_rect(areas.ruler.union(areas.rows)),
-        scene,
-    );
+    let all = painter.with_clip_rect(areas.ruler.union(areas.rows));
+    markers(&all, scene, selection);
 }
 
 fn lanes(painter: &Painter, scene: &Scene) {
@@ -300,12 +299,12 @@ fn header(painter: &Painter, scene: &Scene) {
     painter.vline(area.right() - 0.5, area.y_range(), separator);
 }
 
-fn ruler(painter: &Painter, scene: &Scene) {
+fn ruler(painter: &Painter, scene: &Scene, selection: Option<Rangef>) {
     let visuals = scene.visuals;
     let rect = scene.areas.ruler;
     let axis = &scene.view.axis;
     painter.rect_filled(rect, 0.0, visuals.panel_fill);
-    if let Some(x) = selection_x(painter, scene) {
+    if let Some(x) = selection {
         let band = Rect::from_x_y_ranges(x, rect.y_range());
         painter.rect_filled(band, 0.0, visuals.selection.bg_fill.gamma_multiply(0.6));
     }
@@ -346,10 +345,10 @@ fn corner(painter: &Painter, scene: &Scene) {
 }
 
 /// The ruler draws its part of the selection band itself, beneath the tick labels.
-fn markers(painter: &Painter, scene: &Scene) {
+fn markers(painter: &Painter, scene: &Scene, selection: Option<Rangef>) {
     let ruler = scene.areas.ruler;
     let rows = scene.areas.rows;
-    if let Some(x) = selection_x(painter, scene) {
+    if let Some(x) = selection {
         let band = Rect::from_x_y_ranges(x, rows.y_range());
         let fill = scene.visuals.selection.bg_fill.gamma_multiply(0.2);
         painter.rect_filled(band, 0.0, fill);
@@ -366,13 +365,11 @@ fn markers(painter: &Painter, scene: &Scene) {
     }
 }
 
-fn selection_x(painter: &Painter, scene: &Scene) -> Option<Rangef> {
+/// Screen x range of the selection within the view, so far-off edges do not lose f32 precision.
+fn selection_x(scene: &Scene) -> Option<Rangef> {
     let selection = scene.state.selection?;
-    let view_x = painter.clip_rect().x_range().expand(2.0);
+    let view_x = scene.areas.rows.x_range().expand(2.0);
     let axis = &scene.view.axis;
-    let x = Rangef::new(
-        axis.x(selection.start).max(view_x.min),
-        axis.x(selection.end).min(view_x.max),
-    );
+    let x = Rangef::new(axis.x(selection.start), axis.x(selection.end)).intersection(view_x);
     (x.span() > 0.0).then_some(x)
 }
