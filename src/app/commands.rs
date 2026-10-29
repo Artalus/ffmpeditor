@@ -18,6 +18,8 @@ pub enum Command {
     GoToEnd,
     PreviousFrame,
     NextFrame,
+    ProjectSettings,
+    Settings,
 }
 
 /// What the menus need to know to grey out commands that would do nothing.
@@ -83,6 +85,12 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
                 item(ui, &mut command, Command::GoToEnd, true);
                 item(ui, &mut command, Command::PreviousFrame, true);
                 item(ui, &mut command, Command::NextFrame, true);
+            });
+            ui.menu_button("Project", |ui| {
+                item(ui, &mut command, Command::ProjectSettings, true);
+            });
+            ui.menu_button("Options", |ui| {
+                item(ui, &mut command, Command::Settings, true);
             });
         });
     });
@@ -151,6 +159,8 @@ impl Command {
             Command::GoToEnd => "Go to end",
             Command::PreviousFrame => "Previous frame",
             Command::NextFrame => "Next frame",
+            Command::ProjectSettings => "Project settings…",
+            Command::Settings => "Settings…",
         }
     }
 }

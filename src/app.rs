@@ -13,7 +13,8 @@ use crate::media::MediaCache;
 use crate::model::Project;
 use crate::render::Previewer;
 use crate::ui;
-use crate::ui::dialogs::UnsavedChoice;
+use crate::ui::dialogs::{Outcome, SettingsDialog, UnsavedChoice};
+use crate::ui::project_settings::ProjectSettingsDialog;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
 use editing::{split_targets, step_frames};
@@ -46,6 +47,8 @@ pub struct App {
 enum Dialog {
     None,
     Unsaved(Guarded),
+    Settings(SettingsDialog),
+    ProjectSettings(ProjectSettingsDialog),
 }
 
 /// Actions that would drop unsaved changes.
@@ -165,6 +168,11 @@ impl App {
             Command::GoToEnd => *playhead = duration,
             Command::PreviousFrame => *playhead = step_frames(*playhead, fps, -1, duration),
             Command::NextFrame => *playhead = step_frames(*playhead, fps, 1, duration),
+            Command::ProjectSettings => {
+                let dialog = ProjectSettingsDialog::new(&self.project.settings);
+                self.dialog = Dialog::ProjectSettings(dialog);
+            }
+            Command::Settings => self.dialog = Dialog::Settings(SettingsDialog::new(&self.config)),
         }
     }
 
@@ -262,6 +270,22 @@ impl App {
                 let action = *action;
                 self.unsaved_changes(ctx, action);
             }
+            Dialog::Settings(dialog) => match dialog.show(ctx) {
+                Outcome::Open => {}
+                Outcome::Cancelled => self.dialog = Dialog::None,
+                Outcome::Accepted(config) => {
+                    self.dialog = Dialog::None;
+                    self.apply_config(config);
+                }
+            },
+            Dialog::ProjectSettings(dialog) => match dialog.show(ctx) {
+                Outcome::Open => {}
+                Outcome::Cancelled => self.dialog = Dialog::None,
+                Outcome::Accepted(settings) => {
+                    self.dialog = Dialog::None;
+                    self.project.settings = settings;
+                }
+            },
         }
     }
 
@@ -278,6 +302,21 @@ impl App {
         };
         if proceed {
             self.perform(action, ctx);
+        }
+    }
+
+    fn apply_config(&mut self, config: AppConfig) {
+        if let Err(err) = config.save() {
+            self.report(format!("Saving settings: {err:#}"));
+        }
+        let ffmpeg_changed = config.ffmpeg_path != self.config.ffmpeg_path;
+        self.config = config;
+        self.ffmpeg = Ffmpeg::new(&self.config.ffmpeg_path);
+        self.ffmpeg_status = check_ffmpeg(&self.ffmpeg);
+        self.media.set_ffmpeg(self.ffmpeg.clone());
+        // Sources that failed to probe with a missing ffmpeg may work now.
+        if ffmpeg_changed {
+            self.probe_sources();
         }
     }
 
