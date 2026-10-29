@@ -315,72 +315,9 @@ impl fmt::Display for FrameRate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::{MediaInfo, VideoInfo};
-    use crate::model::{ClipId, Track};
-
-    struct Timeline {
-        project: Project,
-        infos: MediaInfos,
-    }
-
-    impl Timeline {
-        fn new() -> Self {
-            let mut project = Project::default();
-            project.settings.fps = 30.0;
-            Self {
-                project,
-                infos: MediaInfos::new(),
-            }
-        }
-
-        /// Source with video and audio named after `path`.
-        fn clip(&mut self, path: &str, track: Track, start: f64, duration: f64) -> ClipId {
-            self.clip_with(path, true, true, track, start, duration)
-        }
-
-        fn clip_with(
-            &mut self,
-            path: &str,
-            video: bool,
-            audio: bool,
-            track: Track,
-            start: f64,
-            duration: f64,
-        ) -> ClipId {
-            let source = self.project.add_source(path.into());
-            let info = MediaInfo {
-                duration: 100.0,
-                video: video.then_some(VideoInfo {
-                    width: 320,
-                    height: 240,
-                    fps: 30.0,
-                }),
-                has_audio: audio,
-            };
-            self.infos.insert(source, info);
-            let id = self.project.append_clip(source, track, duration);
-            self.project.move_clip(id, start, track);
-            id
-        }
-
-        fn edit(&mut self, id: ClipId) -> &mut Clip {
-            self.project.clip_mut(id).unwrap()
-        }
-
-        fn build(&self, start: f64, end: f64) -> Graph {
-            build(
-                &self.project,
-                &self.infos,
-                &Target {
-                    range: Span { start, end },
-                    width: 640,
-                    height: 360,
-                    audio: true,
-                    input_lookahead: 0.0,
-                },
-            )
-        }
-    }
+    use crate::model::Track;
+    use crate::render::tests::Timeline;
+    use crate::test_support::media_info;
 
     impl Graph {
         fn chain(&self, label: &str) -> &str {
@@ -393,7 +330,7 @@ mod tests {
 
     #[test]
     fn inputs_cover_only_the_part_inside_the_range() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         let a = tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
         tl.edit(a).source_in = 5.0;
         tl.clip("b.mp4", Track::Video(0), 8.0, 12.0);
@@ -419,16 +356,28 @@ mod tests {
 
     #[test]
     fn clips_outside_range_or_without_media_info_are_skipped() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip("before.mp4", Track::Video(0), 0.0, 2.0);
         tl.clip("inside.mp4", Track::Video(0), 2.0, 2.0);
         tl.clip("after.mp4", Track::Video(0), 4.0, 2.0);
         let unprobed = tl.clip("unprobed.mp4", Track::Video(1), 2.0, 2.0);
         let source = tl.project.clip(unprobed).unwrap().source;
         tl.infos.remove(&source);
-        let muted = tl.clip_with("muted.wav", false, true, Track::Audio(0), 2.0, 2.0);
+        let muted = tl.clip_with(
+            "muted.wav",
+            media_info(false, true),
+            Track::Audio(0),
+            2.0,
+            2.0,
+        );
         tl.edit(muted).audio.muted = true;
-        let silent = tl.clip_with("silent.wav", false, true, Track::Audio(0), 2.0, 2.0);
+        let silent = tl.clip_with(
+            "silent.wav",
+            media_info(false, true),
+            Track::Audio(0),
+            2.0,
+            2.0,
+        );
         tl.edit(silent).audio.volume = 0.0;
         let graph = tl.build(2.0, 4.0);
         assert_eq!(graph.inputs.len(), 6);
@@ -437,7 +386,7 @@ mod tests {
 
     #[test]
     fn video_stacks_by_track_then_start() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip("v2.mp4", Track::Video(1), 0.0, 10.0);
         tl.clip("v1-late.mp4", Track::Video(0), 5.0, 5.0);
         tl.clip("v1-early.mp4", Track::Video(0), 0.0, 10.0);
@@ -459,7 +408,7 @@ mod tests {
 
     #[test]
     fn audio_track_clip_contributes_no_video() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip("music.mp4", Track::Audio(0), 0.0, 10.0);
         let graph = tl.build(0.0, 10.0);
         assert!(!graph.filter.contains("[0:v:0]"), "{}", graph.filter);
@@ -474,8 +423,14 @@ mod tests {
 
     #[test]
     fn video_track_clip_without_video_contributes_audio() {
-        let mut tl = Timeline::new();
-        tl.clip_with("voice.wav", false, true, Track::Video(0), 0.0, 10.0);
+        let mut tl = Timeline::new(640, 360, 30.0);
+        tl.clip_with(
+            "voice.wav",
+            media_info(false, true),
+            Track::Video(0),
+            0.0,
+            10.0,
+        );
         let graph = tl.build(0.0, 10.0);
         assert!(!graph.filter.contains("[0:v:0]"), "{}", graph.filter);
         assert!(graph.filter.contains("[0:a:0]"));
@@ -483,7 +438,7 @@ mod tests {
 
     #[test]
     fn fades_use_absolute_timeline_time() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         let clip = tl.clip("a.mp4", Track::Video(0), 10.0, 10.0);
         tl.edit(clip).video.fade_in = 1.0;
         tl.edit(clip).video.fade_out = 2.0;
@@ -503,7 +458,7 @@ mod tests {
 
     #[test]
     fn zero_fades_add_no_filters() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
         let graph = tl.build(0.0, 10.0);
         assert!(!graph.filter.contains("fade"), "{}", graph.filter);
@@ -511,7 +466,7 @@ mod tests {
 
     #[test]
     fn overlapping_clips_crossfade() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
         tl.clip("b.mp4", Track::Video(0), 8.0, 10.0);
         let graph = tl.build(0.0, 18.0);
@@ -535,7 +490,7 @@ mod tests {
 
     #[test]
     fn mute_regions_map_from_source_to_timeline() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         let clip = tl.clip("a.mp4", Track::Video(0), 10.0, 10.0);
         tl.edit(clip).source_in = 5.0;
         tl.edit(clip).audio.mute_regions = vec![
@@ -554,7 +509,7 @@ mod tests {
 
     #[test]
     fn audio_is_delayed_to_its_position_in_range() {
-        let mut tl = Timeline::new();
+        let mut tl = Timeline::new(640, 360, 30.0);
         let clip = tl.clip("a.mp4", Track::Video(0), 3.0, 10.0);
         tl.edit(clip).audio.volume = 0.5;
         let graph = tl.build(1.0, 10.0);
@@ -573,7 +528,7 @@ mod tests {
 
     #[test]
     fn empty_timeline_is_black_and_silent() {
-        let graph = Timeline::new().build(0.0, 2.0);
+        let graph = Timeline::new(640, 360, 30.0).build(0.0, 2.0);
         assert!(graph.inputs.is_empty());
         assert_eq!(
             graph.filter,
@@ -586,11 +541,11 @@ mod tests {
 
     #[test]
     fn range_snaps_to_frame_grid() {
-        let graph = Timeline::new().build(1.01, 1.99);
+        let graph = Timeline::new(640, 360, 30.0).build(1.01, 1.99);
         assert!(graph.filter.starts_with(
             "color=c=black:s=640x360:r=30,trim=end_frame=30,setpts=PTS+round(1.000000/TB)[base];"
         ));
-        let graph = Timeline::new().build(1.0, 1.0);
+        let graph = Timeline::new(640, 360, 30.0).build(1.0, 1.0);
         assert!(graph.filter.contains("trim=end_frame=1,"));
     }
 

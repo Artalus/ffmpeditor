@@ -2,15 +2,16 @@
 
 use std::path::Path;
 
+use super::graph::{self, Graph, Target};
 use super::preview::preview_args;
 use super::*;
-use crate::media::{MediaInfo, MediaInfos, VideoInfo};
-use crate::model::{ClipId, Project, Span, Track};
-use crate::test_support::{ffmpeg, fixtures, output_path, run_ok, wait_until};
+use crate::media::{MediaInfo, MediaInfos};
+use crate::model::{Clip, ClipId, Project, Span, Track};
+use crate::test_support::{ffmpeg, fixtures, media_info, output_path, run_ok, wait_until};
 
-struct Timeline {
-    project: Project,
-    infos: MediaInfos,
+pub struct Timeline {
+    pub project: Project,
+    pub infos: MediaInfos,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,8 +113,8 @@ fn preview_inputs_read_past_the_frame() {
 fn export_renders_overlapping_clips_in_subrange() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
-    tl.source_clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
-    let second = tl.source_clip(&fx.testsrc, Track::Video(0), 2.0, 3.0);
+    tl.clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
+    let second = tl.clip(&fx.testsrc, Track::Video(0), 2.0, 3.0);
     tl.edit(second).audio.mute_regions = vec![Span::new(0.5, 1.0)];
     let output = output_path("overlapping.mp4");
     assert_eq!(
@@ -149,7 +150,7 @@ fn export_places_and_mutes_audio() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
     tl.project.settings.audio_codec = "pcm_s16le".into();
-    let clip = tl.source_clip(&fx.red_16x9, Track::Video(0), 1.0, 2.0);
+    let clip = tl.clip(&fx.red_16x9, Track::Video(0), 1.0, 2.0);
     tl.edit(clip).audio.mute_regions = vec![Span::new(0.5, 1.0)];
     let output = output_path("audio.mkv");
     assert_eq!(
@@ -216,12 +217,12 @@ fn export_can_be_cancelled() {
 fn preview_composites_tracks_and_cuts() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
-    tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.01);
+    tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 1.01);
     // First source frame after the seek lands mid-slot; the slot must still show it, not black.
-    let blue = tl.source_clip(&fx.blue_4x3, Track::Video(0), 1.01, 1.0);
+    let blue = tl.clip(&fx.blue_4x3, Track::Video(0), 1.01, 1.0);
     tl.edit(blue).source_in = 0.02;
-    tl.source_clip(&fx.blue_4x3, Track::Video(1), 3.0, 1.0);
-    tl.source_clip(&fx.red_16x9, Track::Video(0), 2.5, 2.0);
+    tl.clip(&fx.blue_4x3, Track::Video(1), 3.0, 1.0);
+    tl.clip(&fx.red_16x9, Track::Video(0), 2.5, 2.0);
     let pixel = |time: f64, x: u32| {
         let image = render_preview(&tl, time);
         assert_eq!(image.dimensions(), (320, 180));
@@ -241,7 +242,7 @@ fn preview_composites_tracks_and_cuts() {
 fn preview_works_with_graph_in_file() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
-    tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
+    tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
     let args = preview_args(&tl.project, &tl.infos, 0.5);
     let (mut cmd, _file) = process::command(&ffmpeg(), &args, 0).unwrap();
     let output = cmd.output().unwrap();
@@ -258,7 +259,7 @@ fn preview_works_with_graph_in_file() {
 fn previewer_delivers_texture_and_skips_repeated_requests() {
     let fx = fixtures();
     let mut tl = Timeline::new(1280, 720, 30.0);
-    tl.source_clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
+    tl.clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
     let ffmpeg = ffmpeg();
     let mut previewer = Previewer::new(egui::Context::default());
     previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
@@ -293,7 +294,7 @@ fn previewer_reports_errors() {
 }
 
 impl Timeline {
-    fn new(width: u32, height: u32, fps: f64) -> Self {
+    pub fn new(width: u32, height: u32, fps: f64) -> Self {
         let mut project = Project::default();
         project.settings.width = width;
         project.settings.height = height;
@@ -304,30 +305,50 @@ impl Timeline {
         }
     }
 
-    fn clip(&mut self, path: &str, track: Track, start: f64, duration: f64) -> ClipId {
-        self.source_clip(Path::new(path), track, start, duration)
+    /// Source with video and audio.
+    pub fn clip(
+        &mut self,
+        path: impl AsRef<Path>,
+        track: Track,
+        start: f64,
+        duration: f64,
+    ) -> ClipId {
+        self.clip_with(path, media_info(true, true), track, start, duration)
     }
 
-    /// Media info matches the fixtures: 3 s, 30 fps, 320x240, with audio.
-    fn source_clip(&mut self, path: &Path, track: Track, start: f64, duration: f64) -> ClipId {
-        let source = self.project.add_source(path.to_path_buf());
-        let info = MediaInfo {
-            duration: 3.0,
-            video: Some(VideoInfo {
-                width: 320,
-                height: 240,
-                fps: 30.0,
-            }),
-            has_audio: true,
-        };
+    pub fn clip_with(
+        &mut self,
+        path: impl AsRef<Path>,
+        info: MediaInfo,
+        track: Track,
+        start: f64,
+        duration: f64,
+    ) -> ClipId {
+        let source = self.project.add_source(path.as_ref().to_path_buf());
         self.infos.insert(source, info);
         let id = self.project.append_clip(source, track, duration);
         self.project.move_clip(id, start, track);
         id
     }
 
-    fn edit(&mut self, id: ClipId) -> &mut crate::model::Clip {
+    pub fn edit(&mut self, id: ClipId) -> &mut Clip {
         self.project.clip_mut(id).unwrap()
+    }
+
+    /// Graph of `start..end` at the project size, with audio.
+    pub fn build(&self, start: f64, end: f64) -> Graph {
+        let settings = &self.project.settings;
+        graph::build(
+            &self.project,
+            &self.infos,
+            &Target {
+                range: Span { start, end },
+                width: settings.width,
+                height: settings.height,
+                audio: true,
+                input_lookahead: 0.0,
+            },
+        )
     }
 }
 

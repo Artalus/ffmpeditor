@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ffmpeg::Ffmpeg;
+use crate::media::{MediaInfo, VideoInfo};
 
 const H264_AAC: &[&str] = &[
     "-c:v",
@@ -46,6 +47,19 @@ pub fn run_ok(cmd: &mut Command) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+/// Info of a source like the fixtures: 3 s of 320x240 @ 30 fps video and/or audio.
+pub fn media_info(video: bool, audio: bool) -> MediaInfo {
+    MediaInfo {
+        duration: 3.0,
+        video: video.then_some(VideoInfo {
+            width: 320,
+            height: 240,
+            fps: 30.0,
+        }),
+        has_audio: audio,
+    }
 }
 
 /// Polls `cond` until it holds; fails the test after `timeout_secs`.
