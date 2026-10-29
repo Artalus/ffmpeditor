@@ -108,13 +108,14 @@ impl eframe::App for App {
         for command in self.commands(ui) {
             self.run(command, ui.ctx());
         }
+        // Before the panels, so what a dialog changes shows up and gets committed this frame.
+        self.dialogs(ui.ctx());
+        self.export_progress(ui.ctx());
         self.status_bar(ui);
         let timeline = self.timeline_panel(ui);
         self.timeline_busy = timeline.interacting;
         self.viewer(ui);
         self.settle(&timeline);
-        self.dialogs(ui.ctx());
-        self.export_progress(ui.ctx());
         ui::dialogs::errors(ui.ctx(), &mut self.errors);
         self.update_title(ui.ctx());
     }
