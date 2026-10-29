@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::path::Path;
 use std::process::{Child, ChildStderr, ChildStdout, Stdio};
 use std::sync::{Arc, Mutex};
@@ -9,15 +8,13 @@ use anyhow::Context;
 use super::graph::{self, FrameRate, Target};
 use super::process::{self, GraphFile};
 use super::{ExportStatus, MediaInfos};
-use crate::ffmpeg::Ffmpeg;
+use crate::ffmpeg::{self, Ffmpeg};
 use crate::model::{Project, Span};
-
-const STDERR_TAIL_LINES: usize = 30;
 
 pub struct ExportJob {
     process: Mutex<Process>,
     progress: Arc<Mutex<f32>>,
-    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    stderr_tail: Arc<Mutex<String>>,
 }
 
 struct Process {
@@ -92,7 +89,7 @@ impl ExportJob {
             .spawn()
             .with_context(|| format!("running {}", ffmpeg.ffmpeg.display()))?;
         let progress = Arc::new(Mutex::new(0.0));
-        let stderr_tail = Arc::new(Mutex::new(VecDeque::new()));
+        let stderr_tail = Arc::<Mutex<String>>::default();
         let readers = [
             read_progress(child.stdout.take().unwrap(), duration, progress.clone()),
             read_stderr(child.stderr.take().unwrap(), stderr_tail.clone()),
@@ -118,7 +115,10 @@ impl ExportJob {
             // Readers are still draining the pipes, the stderr tail may be incomplete.
             Ok(Some(_)) if !process.readers.iter().all(JoinHandle::is_finished) => None,
             Ok(Some(exit)) if exit.success() => Some(ExportStatus::Finished),
-            Ok(Some(exit)) => Some(ExportStatus::Failed(self.failure(&exit.to_string()))),
+            Ok(Some(exit)) => Some(ExportStatus::Failed(ffmpeg::failure(
+                exit,
+                &self.stderr_tail.lock().unwrap(),
+            ))),
             Ok(None) => None,
             Err(e) => Some(ExportStatus::Failed(format!("waiting for ffmpeg: {e}"))),
         };
@@ -141,15 +141,6 @@ impl ExportJob {
             process.outcome = Some(ExportStatus::Cancelled);
         }
     }
-
-    fn failure(&self, exit: &str) -> String {
-        let tail = self.stderr_tail.lock().unwrap();
-        if tail.is_empty() {
-            format!("ffmpeg failed: {exit}")
-        } else {
-            Vec::from(tail.clone()).join("\n")
-        }
-    }
 }
 
 impl Drop for ExportJob {
@@ -160,7 +151,7 @@ impl Drop for ExportJob {
 
 fn read_progress(stdout: ChildStdout, duration: f64, progress: Arc<Mutex<f32>>) -> JoinHandle<()> {
     thread::spawn(move || {
-        for line in process::lines(stdout) {
+        for line in ffmpeg::lines(stdout) {
             if let Some(fraction) = progress_fraction(&line, duration) {
                 *progress.lock().unwrap() = fraction;
             }
@@ -168,16 +159,8 @@ fn read_progress(stdout: ChildStdout, duration: f64, progress: Arc<Mutex<f32>>) 
     })
 }
 
-fn read_stderr(stderr: ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        for line in process::lines(stderr).filter(|line| !line.is_empty()) {
-            let mut tail = tail.lock().unwrap();
-            if tail.len() == STDERR_TAIL_LINES {
-                tail.pop_front();
-            }
-            tail.push_back(line);
-        }
-    })
+fn read_stderr(stderr: ChildStderr, tail: Arc<Mutex<String>>) -> JoinHandle<()> {
+    thread::spawn(move || *tail.lock().unwrap() = ffmpeg::stderr_tail(stderr))
 }
 
 fn progress_fraction(line: &str, duration: f64) -> Option<f32> {

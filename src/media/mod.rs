@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use serde::Deserialize;
 
-use crate::ffmpeg::Ffmpeg;
+use crate::ffmpeg::{self, Ffmpeg};
 
 mod cache;
 #[cfg(test)]
@@ -55,8 +55,10 @@ pub fn probe(ffmpeg: &Ffmpeg, path: &Path) -> anyhow::Result<MediaInfo> {
         .output()
         .with_context(|| format!("running {}", ffmpeg.ffprobe.display()))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("cannot read {}: {}", path.display(), stderr.trim());
+        bail!(ffmpeg::failure(
+            output.status,
+            &String::from_utf8_lossy(&output.stderr)
+        ));
     }
     parse_probe(&output.stdout).with_context(|| format!("probing {}", path.display()))
 }

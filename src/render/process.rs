@@ -1,6 +1,5 @@
 //! Spawning ffmpeg with possibly huge filter graphs and reading its output.
 
-use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,15 +34,6 @@ pub fn command_with_limit(
     let mut cmd = ffmpeg.ffmpeg();
     cmd.args(&args);
     Ok((cmd, graph_file))
-}
-
-/// Lines of ffmpeg output. Lossy: paths in messages may not be UTF-8, and stopping at a bad line
-/// would leave the pipe undrained and block ffmpeg.
-pub fn lines(reader: impl Read) -> impl Iterator<Item = String> {
-    BufReader::new(reader)
-        .split(b'\n')
-        .map_while(Result::ok)
-        .map(|line| String::from_utf8_lossy(&line).trim_end().to_owned())
 }
 
 /// Upper estimate: quotes and a separator around every argument.

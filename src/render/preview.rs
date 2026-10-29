@@ -1,4 +1,3 @@
-use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -7,7 +6,7 @@ use anyhow::{Context, bail};
 
 use super::graph::{self, FrameRate, Target};
 use super::{MediaInfos, process};
-use crate::ffmpeg::Ffmpeg;
+use crate::ffmpeg::{self, Ffmpeg};
 use crate::model::{Project, Span};
 
 const MAX_PREVIEW_SIZE: (u32, u32) = (960, 540);
@@ -177,13 +176,13 @@ fn render_loop(
 fn render(request: &Request) -> anyhow::Result<egui::ColorImage> {
     let (mut cmd, _graph_file) = process::command(&request.ffmpeg, &request.args)?;
     let output = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .output()
         .with_context(|| format!("running {}", request.ffmpeg.ffmpeg.display()))?;
     if !output.status.success() {
-        let stderr: Vec<String> = process::lines(output.stderr.as_slice()).collect();
-        bail!("ffmpeg failed ({}): {}", output.status, stderr.join("\n"));
+        bail!(ffmpeg::failure(
+            output.status,
+            &String::from_utf8_lossy(&output.stderr)
+        ));
     }
     let image = image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
         .context("decoding preview frame")?

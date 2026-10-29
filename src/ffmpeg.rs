@@ -1,7 +1,11 @@
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{Context, bail};
+
+const STDERR_TAIL_LINES: usize = 30;
 
 /// Locations of the ffmpeg and ffprobe binaries; ffprobe is expected next to ffmpeg.
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +45,34 @@ impl Ffmpeg {
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout.lines().next().unwrap_or_default().to_owned())
+    }
+}
+
+/// Lines of ffmpeg output. Lossy: paths in messages may not be UTF-8, and stopping at a bad line
+/// would leave the pipe undrained and block ffmpeg.
+pub fn lines(reader: impl Read) -> impl Iterator<Item = String> {
+    BufReader::new(reader)
+        .split(b'\n')
+        .map_while(Result::ok)
+        .map(|line| String::from_utf8_lossy(&line).trim_end().to_owned())
+}
+
+/// Drains `stderr`, keeping its last lines.
+pub fn stderr_tail(stderr: impl Read) -> String {
+    let mut tail = VecDeque::new();
+    for line in lines(stderr).filter(|line| !line.is_empty()) {
+        if tail.len() == STDERR_TAIL_LINES {
+            tail.pop_front();
+        }
+        tail.push_back(line);
+    }
+    tail.make_contiguous().join("\n")
+}
+
+pub fn failure(status: ExitStatus, stderr_tail: &str) -> String {
+    match stderr_tail.trim() {
+        "" => format!("ffmpeg failed: {status}"),
+        tail => format!("ffmpeg failed: {status}: {tail}"),
     }
 }
 

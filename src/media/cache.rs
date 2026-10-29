@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +10,7 @@ use std::thread;
 use anyhow::{Context, bail};
 
 use super::{MediaInfo, Waveform, probe, thumbnails, waveform};
-use crate::ffmpeg::Ffmpeg;
+use crate::ffmpeg::{self, Ffmpeg};
 use crate::model::SourceId;
 
 /// Importing many files at once must not start an ffmpeg per file.
@@ -340,17 +340,16 @@ impl Workers {
             (stdout, stderr)
         };
         // Drained concurrently, or a chatty ffmpeg blocks on a full stderr pipe.
-        let stderr = thread::spawn(move || last_line(stderr));
+        let stderr = thread::spawn(move || ffmpeg::stderr_tail(stderr));
         let read = read(stdout);
-        let child = lock(&self.running[slot]).take();
-        let status = child.map(|mut child| child.wait()).transpose()?;
+        let mut child = lock(&self.running[slot]).take().expect("parked above");
+        let status = child.wait()?;
         let stderr = stderr.join().unwrap_or_default();
         read.context("reading ffmpeg output")?;
-        match status {
-            Some(status) if status.success() => Ok(()),
-            Some(status) if stderr.is_empty() => bail!("ffmpeg failed: {status}"),
-            _ => bail!("ffmpeg failed: {stderr}"),
+        if !status.success() {
+            bail!(ffmpeg::failure(status, &stderr));
         }
+        Ok(())
     }
 
     fn is_live(&self, ticket: u64) -> bool {
@@ -371,16 +370,6 @@ impl Workers {
 /// Separate function so the queue lock is released before the job runs.
 fn next_job(jobs: &Mutex<Receiver<Job>>) -> Option<Job> {
     lock(jobs).recv().ok()
-}
-
-fn last_line(stderr: impl Read) -> String {
-    BufReader::new(stderr)
-        .split(b'\n')
-        .map_while(Result::ok)
-        .map(|line| String::from_utf8_lossy(&line).trim().to_owned())
-        .filter(|line| !line.is_empty())
-        .last()
-        .unwrap_or_default()
 }
 
 /// A worker panicking mid-job must not take the UI thread down with it.
