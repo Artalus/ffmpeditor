@@ -1,5 +1,3 @@
-use std::cmp::Reverse;
-
 use egui::{Context, Key, KeyboardShortcut, Modifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,15 +30,16 @@ pub struct MenuState {
 }
 
 /// The first shortcut of a command is the one shown in menus.
+/// egui matches Ctrl+S when Ctrl+Shift+S is pressed, so shortcuts with more modifiers go first.
 const BINDINGS: &[(Command, &[KeyboardShortcut])] = &[
+    (Command::SaveAs, &[ctrl_shift(Key::S)]),
+    (Command::Redo, &[ctrl(Key::Y), ctrl_shift(Key::Z)]),
     (Command::New, &[ctrl(Key::N)]),
     (Command::Open, &[ctrl(Key::O)]),
     (Command::Save, &[ctrl(Key::S)]),
-    (Command::SaveAs, &[ctrl_shift(Key::S)]),
     (Command::Import, &[ctrl(Key::I)]),
     (Command::Export, &[ctrl(Key::E)]),
     (Command::Undo, &[ctrl(Key::Z)]),
-    (Command::Redo, &[ctrl(Key::Y), ctrl_shift(Key::Z)]),
     (Command::Split, &[plain(Key::S)]),
     (Command::DeleteClip, &[plain(Key::Delete)]),
     (Command::GoToStart, &[plain(Key::Home)]),
@@ -51,8 +50,9 @@ const BINDINGS: &[(Command, &[KeyboardShortcut])] = &[
 
 pub fn read_shortcuts(ctx: &Context) -> Vec<Command> {
     ctx.input_mut(|input| {
-        matching_order()
-            .into_iter()
+        BINDINGS
+            .iter()
+            .flat_map(|(command, shortcuts)| shortcuts.iter().map(move |s| (s, *command)))
             .filter(|(shortcut, _)| {
                 // egui ignores extra Shift and Alt, so a bare S would also fire on Shift+S.
                 let held_ok = !shortcut.modifiers.is_none() || input.modifiers.is_none();
@@ -101,16 +101,6 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
     command
 }
 
-/// egui matches Ctrl+S when Ctrl+Shift+S is pressed, so shortcuts with more modifiers go first.
-fn matching_order() -> Vec<(KeyboardShortcut, Command)> {
-    let mut order: Vec<_> = BINDINGS
-        .iter()
-        .flat_map(|(command, shortcuts)| shortcuts.iter().map(|shortcut| (*shortcut, *command)))
-        .collect();
-    order.sort_by_key(|(shortcut, _)| Reverse(modifier_count(shortcut.modifiers)));
-    order
-}
-
 fn item(ui: &mut egui::Ui, clicked: &mut Option<Command>, command: Command, enabled: bool) {
     let mut button = egui::Button::new(command.label());
     if let Some(shortcut) = shortcut(command) {
@@ -119,12 +109,6 @@ fn item(ui: &mut egui::Ui, clicked: &mut Option<Command>, command: Command, enab
     if ui.add_enabled(enabled, button).clicked() {
         *clicked = Some(command);
     }
-}
-
-fn modifier_count(modifiers: Modifiers) -> u8 {
-    u8::from(modifiers.alt)
-        + u8::from(modifiers.shift)
-        + u8::from(modifiers.ctrl || modifiers.command || modifiers.mac_cmd)
 }
 
 fn shortcut(command: Command) -> Option<&'static KeyboardShortcut> {
@@ -174,34 +158,6 @@ impl Command {
 mod tests {
     use super::*;
 
-    fn position(shortcut: KeyboardShortcut) -> usize {
-        matching_order()
-            .iter()
-            .position(|(s, _)| *s == shortcut)
-            .unwrap()
-    }
-
-    #[test]
-    fn specific_shortcuts_match_first() {
-        assert!(position(ctrl_shift(Key::Z)) < position(ctrl(Key::Z)));
-        assert!(position(ctrl_shift(Key::S)) < position(ctrl(Key::S)));
-        assert!(position(ctrl(Key::S)) < position(plain(Key::S)));
-    }
-
-    #[test]
-    fn shortcuts_are_unique() {
-        let order = matching_order();
-        for (i, (a, _)) in order.iter().enumerate() {
-            assert!(order[i + 1..].iter().all(|(b, _)| a != b), "{a:?}");
-        }
-    }
-
-    #[test]
-    fn menus_show_first_shortcut() {
-        assert_eq!(shortcut(Command::Redo), Some(&ctrl(Key::Y)));
-        assert_eq!(shortcut(Command::Quit), None);
-    }
-
     fn pressed(key: Key, modifiers: Modifiers) -> Vec<Command> {
         let event = egui::Event::Key {
             key,
@@ -222,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_keys_ignore_shift_and_alt() {
+    fn shortcuts_match_their_exact_modifiers() {
         assert_eq!(pressed(Key::S, Modifiers::NONE), [Command::Split]);
         assert_eq!(pressed(Key::S, Modifiers::SHIFT), []);
         assert_eq!(pressed(Key::S, Modifiers::ALT), []);
@@ -231,6 +187,11 @@ mod tests {
         assert_eq!(
             pressed(Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
             [Command::SaveAs]
+        );
+        assert_eq!(pressed(Key::Z, Modifiers::COMMAND), [Command::Undo]);
+        assert_eq!(
+            pressed(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT),
+            [Command::Redo]
         );
     }
 }

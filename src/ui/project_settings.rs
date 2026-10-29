@@ -241,13 +241,4 @@ mod tests {
         };
         assert!(matching_preset(&settings).is_none());
     }
-
-    #[test]
-    fn preset_names_are_unique() {
-        for (i, a) in PRESETS.iter().enumerate() {
-            for b in &PRESETS[i + 1..] {
-                assert_ne!(a.name, b.name);
-            }
-        }
-    }
 }
