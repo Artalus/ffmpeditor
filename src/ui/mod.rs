@@ -5,6 +5,22 @@ pub mod status_bar;
 pub mod timeline;
 pub mod viewer;
 
+use std::path::{Path, PathBuf};
+
+/// Last component of `path` as text.
+pub fn file_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+/// Not every platform's save dialog appends the filter's extension to a bare name.
+pub fn with_default_ext(mut path: PathBuf, ext: &str) -> PathBuf {
+    if path.extension().is_none() {
+        path.set_extension(ext);
+    }
+    path
+}
+
 /// `m:ss`, or `h:mm:ss` from an hour on (always with `hours`), plus `decimals` fractional digits.
 pub fn format_time(seconds: f64, decimals: usize, hours: bool) -> String {
     let scale = 10_u64.pow(decimals as u32);
@@ -25,6 +41,23 @@ pub fn format_time(seconds: f64, decimals: usize, hours: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_names_and_default_extensions() {
+        assert_eq!(
+            file_name(Path::new("D:/proj/match.toml")).as_deref(),
+            Some("match.toml")
+        );
+        assert_eq!(file_name(Path::new("")), None);
+        assert_eq!(
+            with_default_ext("clip".into(), "mp4"),
+            Path::new("clip.mp4")
+        );
+        assert_eq!(
+            with_default_ext("clip.mkv".into(), "mp4"),
+            Path::new("clip.mkv")
+        );
+    }
 
     #[test]
     fn times_with_hours_and_milliseconds() {

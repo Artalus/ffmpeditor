@@ -9,8 +9,8 @@ use crate::media::MediaInfos;
 use crate::model::{Project, Span};
 use crate::render::{ExportStatus, export_args};
 use crate::ui::dialogs::{Outcome, confirm_buttons, modal};
-use crate::ui::format_time;
 use crate::ui::status_bar::timecode;
+use crate::ui::{file_name, format_time, with_default_ext};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Range {
@@ -195,18 +195,15 @@ fn pick_output(current: &Path, format: &str) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title("Export to")
         .add_filter(format, &[format]);
-    if let Some(name) = current.file_name() {
-        dialog = dialog.set_file_name(name.to_string_lossy());
+    if let Some(name) = file_name(current) {
+        dialog = dialog.set_file_name(name);
     }
     if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
         dialog = dialog.set_directory(dir);
     }
-    let mut path = dialog.save_file()?;
-    // Not every platform's dialog appends the filter's extension to a bare name.
-    if path.extension().is_none() {
-        path.set_extension(format);
-    }
-    Some(path)
+    dialog
+        .save_file()
+        .map(|path| with_default_ext(path, format))
 }
 
 fn resolve_range(

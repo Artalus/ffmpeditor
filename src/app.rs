@@ -16,6 +16,7 @@ use crate::render::Previewer;
 use crate::ui;
 use crate::ui::dialogs::{Outcome, SettingsDialog, UnsavedChoice};
 use crate::ui::export::ExportDialog;
+use crate::ui::file_name;
 use crate::ui::project_settings::ProjectSettingsDialog;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
@@ -405,10 +406,8 @@ fn window_title(path: Option<&Path>, dirty: bool) -> String {
 }
 
 fn display_name(path: Option<&Path>) -> String {
-    path.and_then(Path::file_name)
-        .map_or("untitled".to_owned(), |name| {
-            name.to_string_lossy().into_owned()
-        })
+    path.and_then(file_name)
+        .unwrap_or_else(|| "untitled".to_owned())
 }
 
 #[cfg(test)]

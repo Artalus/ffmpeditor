@@ -4,8 +4,9 @@ use super::App;
 use super::history::History;
 use crate::model::Project;
 use crate::ui::timeline::TimelineState;
+use crate::ui::{file_name, with_default_ext};
 
-const PROJECT_EXTENSIONS: &[&str] = &["toml"];
+const PROJECT_EXT: &str = "toml";
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "flv", "ts"];
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "m4a", "opus", "aac"];
 
@@ -17,7 +18,7 @@ impl App {
     pub(super) fn open(&mut self) {
         let Some(path) = self
             .file_dialog()
-            .add_filter("ffmpeditor project", PROJECT_EXTENSIONS)
+            .add_filter("ffmpeditor project", &[PROJECT_EXT])
             .pick_file()
         else {
             return;
@@ -40,23 +41,17 @@ impl App {
         let name = self
             .project_path
             .as_deref()
-            .and_then(Path::file_name)
-            .map_or("project.toml".to_owned(), |name| {
-                name.to_string_lossy().into_owned()
-            });
-        let Some(mut path) = self
+            .and_then(file_name)
+            .unwrap_or_else(|| format!("project.{PROJECT_EXT}"));
+        let Some(path) = self
             .file_dialog()
-            .add_filter("ffmpeditor project", PROJECT_EXTENSIONS)
+            .add_filter("ffmpeditor project", &[PROJECT_EXT])
             .set_file_name(name)
             .save_file()
         else {
             return false;
         };
-        // Not every platform's dialog appends the filter's extension to a bare name.
-        if path.extension().is_none() {
-            path.set_extension(PROJECT_EXTENSIONS[0]);
-        }
-        self.save_to(path)
+        self.save_to(with_default_ext(path, PROJECT_EXT))
     }
 
     pub(super) fn import(&mut self) {
