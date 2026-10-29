@@ -41,12 +41,10 @@ struct Thumbnails {
     finished: bool,
 }
 
-/// Shared between the cache and its worker threads.
 struct Workers {
     ctx: egui::Context,
     /// Jobs with lower tickets were cleared: workers skip them and their processes get killed.
     first_live_ticket: AtomicU64,
-    /// The ffmpeg each worker is running, reachable from the UI thread to kill it.
     running: [Slot; WORKERS],
 }
 
@@ -106,7 +104,6 @@ impl MediaCache {
         self.ffmpeg = ffmpeg;
     }
 
-    /// Probes synchronously, then starts thumbnail and waveform extraction in the background.
     pub fn add(&mut self, id: SourceId, path: &Path) -> anyhow::Result<MediaInfo> {
         if let Some(info) = self.loaded(id, path) {
             return Ok(info.clone());
@@ -168,7 +165,6 @@ impl MediaCache {
         self.sources.get(&id)?.waveform.as_ref()
     }
 
-    /// Thumbnails or waveform of the source are still being extracted.
     pub fn is_loading(&self, id: SourceId) -> bool {
         self.sources.get(&id).is_some_and(|s| s.running_jobs > 0)
     }

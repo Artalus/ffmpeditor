@@ -2,7 +2,6 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::process::Command;
 
-use super::read_full;
 use crate::ffmpeg::Ffmpeg;
 
 pub const PEAKS_PER_SECOND: f64 = 100.0;
@@ -24,13 +23,17 @@ pub fn command(ffmpeg: &Ffmpeg, path: &Path) -> Command {
 }
 
 pub fn read_peaks(mut pcm: impl Read, mut on_batch: impl FnMut(Vec<f32>)) -> io::Result<()> {
-    let mut block = vec![0; BYTES_PER_PEAK * PEAKS_PER_BATCH];
+    const BYTES_PER_BATCH: usize = BYTES_PER_PEAK * PEAKS_PER_BATCH;
+    let mut block = Vec::with_capacity(BYTES_PER_BATCH);
     loop {
-        let len = read_full(&mut pcm, &mut block)?;
-        if len > 0 {
-            on_batch(peaks(&block[..len]));
+        block.clear();
+        pcm.by_ref()
+            .take(BYTES_PER_BATCH as u64)
+            .read_to_end(&mut block)?;
+        if !block.is_empty() {
+            on_batch(peaks(&block));
         }
-        if len < block.len() {
+        if block.len() < BYTES_PER_BATCH {
             return Ok(());
         }
     }

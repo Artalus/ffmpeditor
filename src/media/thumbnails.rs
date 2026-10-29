@@ -2,9 +2,11 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::process::Command;
 
-use super::{THUMBNAIL_HEIGHT, VideoInfo, read_full};
+use super::VideoInfo;
 use crate::ffmpeg::Ffmpeg;
 
+/// Thumbnail textures are this tall; width follows the source's aspect ratio.
+const THUMBNAIL_HEIGHT: u32 = 72;
 /// Long recordings get sparser thumbnails instead of more of them.
 const MAX_THUMBNAILS: f64 = 300.0;
 const MIN_INTERVAL_MS: u64 = 1000;
@@ -67,11 +69,16 @@ pub fn read_frames(
     mut on_frame: impl FnMut(egui::ColorImage),
 ) -> io::Result<()> {
     let size = [layout.width as usize, layout.height as usize];
-    let mut frame = vec![0; size[0] * size[1] * 4];
-    while read_full(&mut rgba, &mut frame)? == frame.len() {
+    let len = size[0] * size[1] * 4;
+    let mut frame = Vec::with_capacity(len);
+    loop {
+        frame.clear();
+        rgba.by_ref().take(len as u64).read_to_end(&mut frame)?;
+        if frame.len() < len {
+            return Ok(());
+        }
         on_frame(egui::ColorImage::from_rgba_unmultiplied(size, &frame));
     }
-    Ok(())
 }
 
 #[cfg(test)]

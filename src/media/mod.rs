@@ -1,6 +1,5 @@
 //! Source media inspection: probing, timeline thumbnails, waveforms.
 
-use std::io::{self, Read};
 use std::path::Path;
 
 use anyhow::{Context, bail};
@@ -15,9 +14,6 @@ mod thumbnails;
 mod waveform;
 
 pub use cache::MediaCache;
-
-/// Thumbnail textures are this tall; width follows the source's aspect ratio.
-pub const THUMBNAIL_HEIGHT: u32 = 72;
 
 /// Used when a stream reports no usable frame rate, so frame-step math never divides by zero.
 const FALLBACK_FPS: f64 = 30.0;
@@ -159,20 +155,6 @@ impl ProbeStream {
     fn is_type(&self, codec_type: &str) -> bool {
         self.codec_type.as_deref() == Some(codec_type)
     }
-}
-
-/// Like `read_exact`, but at EOF returns how much was filled instead of failing.
-fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
-    let mut filled = 0;
-    while filled < buf.len() {
-        match reader.read(&mut buf[filled..]) {
-            Ok(0) => break,
-            Ok(n) => filled += n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(filled)
 }
 
 #[cfg(test)]
