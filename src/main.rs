@@ -1,6 +1,4 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// Module APIs are stubbed ahead of their implementations; drop once everything is wired up.
-#![allow(dead_code, unused_variables)]
 
 mod app;
 mod config;
