@@ -4,13 +4,13 @@ use egui::{Pos2, Rect, pos2};
 
 use crate::model::{Clip, Project, Track};
 
-pub const HEADER_WIDTH: f32 = 70.0;
-pub const RULER_HEIGHT: f32 = 24.0;
-pub const VIDEO_LANE_HEIGHT: f32 = 44.0;
-pub const AUDIO_LANE_HEIGHT: f32 = 30.0;
-pub const TRACK_GAP: f32 = 3.0;
-pub const MIN_PIXELS_PER_SECOND: f32 = 0.5;
-pub const MAX_PIXELS_PER_SECOND: f32 = 2000.0;
+const HEADER_WIDTH: f32 = 70.0;
+const RULER_HEIGHT: f32 = 24.0;
+const VIDEO_LANE_HEIGHT: f32 = 44.0;
+const AUDIO_LANE_HEIGHT: f32 = 30.0;
+const TRACK_GAP: f32 = 3.0;
+const MIN_PIXELS_PER_SECOND: f32 = 0.5;
+const MAX_PIXELS_PER_SECOND: f32 = 2000.0;
 
 const MIN_LABEL_SPACING: f32 = 80.0;
 const MIN_TICK_SPACING: f32 = 8.0;
@@ -38,8 +38,8 @@ pub struct TimeAxis {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackCounts {
-    pub video: u32,
-    pub audio: u32,
+    video: u32,
+    audio: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,8 +54,8 @@ pub struct Lane {
     pub track: Track,
     pub kind: LaneKind,
     /// Relative to the top of the rows content.
-    pub top: f32,
-    pub height: f32,
+    top: f32,
+    height: f32,
 }
 
 /// Screen placement of the rows: lanes plus the scroll offsets.
@@ -69,8 +69,8 @@ pub struct View {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ticks {
-    pub major: f64,
-    pub minor: f64,
+    major: f64,
+    minor: f64,
 }
 
 impl Areas {
@@ -181,7 +181,7 @@ pub fn content_height(lanes: &[Lane]) -> f32 {
 }
 
 impl Lane {
-    pub fn bottom(&self) -> f32 {
+    fn bottom(&self) -> f32 {
         self.top + self.height
     }
 

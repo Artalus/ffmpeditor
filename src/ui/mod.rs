@@ -22,7 +22,7 @@ pub fn with_default_ext(mut path: PathBuf, ext: &str) -> PathBuf {
 }
 
 /// `m:ss`, or `h:mm:ss` from an hour on (always with `hours`), plus `decimals` fractional digits.
-pub fn format_time(seconds: f64, decimals: usize, hours: bool) -> String {
+fn format_time(seconds: f64, decimals: usize, hours: bool) -> String {
     let scale = 10_u64.pow(decimals as u32);
     let total = (seconds.max(0.0) * scale as f64).round() as u64;
     let (secs, frac) = (total / scale, total % scale);

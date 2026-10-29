@@ -3,7 +3,7 @@
 use super::layout::TimeAxis;
 use crate::model::{ClipId, Project, Span, Track};
 
-pub const EDGE_GRAB: f32 = 6.0;
+const EDGE_GRAB: f32 = 6.0;
 pub const SNAP_DISTANCE: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +132,7 @@ pub fn opposite_edge(axis: &TimeAxis, selection: Span, x: f32) -> Option<f64> {
     })
 }
 
-pub fn snap_targets(project: &Project, exclude: Option<ClipId>, playhead: Option<f64>) -> Vec<f64> {
+fn snap_targets(project: &Project, exclude: Option<ClipId>, playhead: Option<f64>) -> Vec<f64> {
     let edges = project
         .clips
         .iter()
@@ -141,12 +141,12 @@ pub fn snap_targets(project: &Project, exclude: Option<ClipId>, playhead: Option
     [0.0].into_iter().chain(playhead).chain(edges).collect()
 }
 
-pub fn snap_time(t: f64, targets: &[f64], distance: f64) -> f64 {
+fn snap_time(t: f64, targets: &[f64], distance: f64) -> f64 {
     nearest(t, targets, distance).unwrap_or(t)
 }
 
 /// Snaps whichever edge of `start..start + duration` is closer to a target; returns the new start.
-pub fn snap_span(start: f64, duration: f64, targets: &[f64], distance: f64) -> f64 {
+fn snap_span(start: f64, duration: f64, targets: &[f64], distance: f64) -> f64 {
     let by_start = nearest(start, targets, distance);
     let by_end = nearest(start + duration, targets, distance).map(|t| t - duration);
     [by_start, by_end]

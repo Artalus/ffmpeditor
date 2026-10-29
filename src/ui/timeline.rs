@@ -12,9 +12,9 @@ use crate::media::MediaCache;
 use crate::model::{ClipId, Project, Span};
 
 pub struct TimelineState {
-    pub pixels_per_second: f32,
+    pixels_per_second: f32,
     /// Timeline time at the left edge of the view, seconds.
-    pub scroll: f64,
+    scroll: f64,
     pub playhead: f64,
     /// Export / preview range picked on the ruler.
     pub selection: Option<Span>,

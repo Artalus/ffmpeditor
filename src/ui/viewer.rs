@@ -50,7 +50,7 @@ pub fn show(ui: &mut egui::Ui, previewer: &Previewer, placeholder: &str) {
 }
 
 /// Largest rect with the aspect ratio of `image` centred in `area`.
-pub fn fit(area: Rect, image: Vec2) -> Rect {
+fn fit(area: Rect, image: Vec2) -> Rect {
     if image.x <= 0.0 || image.y <= 0.0 {
         return area;
     }

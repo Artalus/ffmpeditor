@@ -13,7 +13,7 @@ use crate::ui::status_bar::timecode;
 use crate::ui::{file_name, format_time, with_default_ext};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Range {
+enum Range {
     Timeline,
     Selection,
 }

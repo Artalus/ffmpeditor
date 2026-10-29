@@ -3,16 +3,16 @@ use egui::{ComboBox, Context, DragValue, Grid, TextEdit};
 use crate::model::ProjectSettings;
 use crate::ui::dialogs::{Outcome, confirm_buttons, modal};
 
-pub struct Preset {
-    pub name: &'static str,
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
+struct Preset {
+    name: &'static str,
+    width: u32,
+    height: u32,
+    fps: f64,
     /// Suggested rate, roughly what streaming sites recommend for uploads.
-    pub video_bitrate_kbps: u32,
+    video_bitrate_kbps: u32,
 }
 
-pub const PRESETS: &[Preset] = &[
+const PRESETS: &[Preset] = &[
     Preset {
         name: "720p30",
         width: 1280,
@@ -123,7 +123,7 @@ impl ProjectSettingsDialog {
     }
 }
 
-pub fn matching_preset(settings: &ProjectSettings) -> Option<&'static Preset> {
+fn matching_preset(settings: &ProjectSettings) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.matches(settings))
 }
 
