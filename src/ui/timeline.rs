@@ -19,6 +19,8 @@ pub struct TimelineState {
     /// Export / preview range picked on the ruler.
     pub selection: Option<Span>,
     pub selected_clip: Option<ClipId>,
+    /// Clip under the last right-click; the context menu acts on it.
+    menu_clip: Option<ClipId>,
     /// Vertical scroll of the track rows, points.
     scroll_y: f32,
     drag: Option<Drag>,
@@ -72,6 +74,7 @@ pub fn show(
     };
     edit_range(ui, &ruler, state, project, &view);
     edit_clips(ui, &rows, state, project, media, &view);
+    clip_menu(&rows, state, project);
     if state.drag.is_some() && !ruler.dragged() && !rows.dragged() {
         state.drag = None;
     }
@@ -193,6 +196,14 @@ fn edit_clips(
         state.selected_clip = hit(view, project, pos).map(|(clip, _)| clip);
         state.playhead = axis.time(pos.x).max(0.0);
     }
+    if response.secondary_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        state.menu_clip = hit(view, project, pos).map(|(clip, _)| clip);
+        if state.menu_clip.is_some() {
+            state.selected_clip = state.menu_clip;
+        }
+    }
     if response.drag_started_by(PointerButton::Primary)
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && let Some((clip, zone)) = hit(view, project, origin)
@@ -216,6 +227,40 @@ fn edit_clips(
         };
         edit.apply(project, axis.time(pos.x), track, source_duration, snapping);
     }
+}
+
+fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) {
+    let Some(id) = state.menu_clip else { return };
+    rows.context_menu(|ui| {
+        let Some(clip) = project.clip(id) else {
+            return;
+        };
+        let muted = clip.audio.muted;
+        let selection = state
+            .selection
+            .filter(|s| s.intersect(clip.span()).is_some());
+        let label = if muted { "Unmute clip" } else { "Mute clip" };
+        if ui.button(label).clicked() {
+            project.set_muted(id, !muted);
+            ui.close();
+        }
+        let enabled = selection.is_some();
+        let range = selection.unwrap_or(Span::new(0.0, 0.0));
+        if ui
+            .add_enabled(enabled, egui::Button::new("Mute selection"))
+            .clicked()
+        {
+            project.mute_range(id, range);
+            ui.close();
+        }
+        if ui
+            .add_enabled(enabled, egui::Button::new("Unmute selection"))
+            .clicked()
+        {
+            project.unmute_range(id, range);
+            ui.close();
+        }
+    });
 }
 
 fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
@@ -285,6 +330,7 @@ impl Default for TimelineState {
             playhead: 0.0,
             selection: None,
             selected_clip: None,
+            menu_clip: None,
             scroll_y: 0.0,
             drag: None,
             used_video: Vec::new(),
