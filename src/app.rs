@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use egui::{Context, ViewportCommand};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, config_path};
 use crate::ffmpeg::Ffmpeg;
 use crate::media::MediaCache;
 use crate::model::Project;
@@ -16,10 +16,11 @@ use crate::render::Previewer;
 use crate::ui;
 use crate::ui::dialogs::{Outcome, SettingsDialog, UnsavedChoice};
 use crate::ui::export::ExportDialog;
+use crate::ui::file_name;
 use crate::ui::project_settings::ProjectSettingsDialog;
 use crate::ui::timeline::{TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
-use editing::{split_targets, step_frames};
+use editing::step_frames;
 use export::{RunningExport, start_export};
 use history::History;
 
@@ -44,6 +45,8 @@ pub struct App {
     dialog: Dialog,
     /// The user already agreed to drop unsaved changes, so the next close request goes through.
     quit_confirmed: bool,
+    /// Config file that failed to load; saving settings would overwrite it.
+    unreadable_config: Option<PathBuf>,
     errors: Vec<String>,
     /// Last title sent to the window, to avoid resending it every frame.
     title: String,
@@ -54,6 +57,8 @@ enum Dialog {
     None,
     Unsaved(Guarded),
     Settings(SettingsDialog),
+    /// Settings accepted while the config file on disk is unreadable.
+    OverwriteConfig(AppConfig, PathBuf),
     ProjectSettings(ProjectSettingsDialog),
     Export(ExportDialog),
 }
@@ -68,10 +73,15 @@ enum Guarded {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let config = AppConfig::load();
+        let mut errors = Vec::new();
+        let mut unreadable_config = None;
+        let config = AppConfig::load().unwrap_or_else(|err| {
+            errors.push(format!("{err:#}; using defaults"));
+            unreadable_config = config_path();
+            AppConfig::default()
+        });
         let ffmpeg = Ffmpeg::new(&config.ffmpeg_path);
         let ffmpeg_status = check_ffmpeg(&ffmpeg);
-        let mut errors = Vec::new();
         if let Err(err) = &ffmpeg_status {
             errors.push(format!(
                 "ffmpeg not usable ({err}); set its location in Options → Settings."
@@ -94,6 +104,7 @@ impl App {
             last_export: None,
             dialog: Dialog::None,
             quit_confirmed: false,
+            unreadable_config,
             errors,
             title: String::new(),
         }
@@ -158,9 +169,6 @@ impl App {
     }
 
     fn run(&mut self, command: Command, ctx: &Context) {
-        let playhead = &mut self.timeline.playhead;
-        let duration = self.project.duration();
-        let fps = self.project.settings.fps;
         match command {
             Command::New => self.guard(Guarded::New, ctx),
             Command::Open => self.guard(Guarded::Open, ctx),
@@ -174,18 +182,23 @@ impl App {
             Command::Export => self.open_export_dialog(),
             // Goes through handle_close_request, which owns the unsaved-changes check.
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
-            Command::Undo => {
-                self.history.undo(&mut self.project);
+            Command::Undo => self.history.undo(&mut self.project),
+            Command::Redo => self.history.redo(&mut self.project),
+            Command::Split => {
+                self.project
+                    .split_at(self.timeline.playhead, self.timeline.selected_clip);
             }
-            Command::Redo => {
-                self.history.redo(&mut self.project);
-            }
-            Command::Split => self.split_at_playhead(),
             Command::DeleteClip => self.delete_selected_clip(),
-            Command::GoToStart => *playhead = 0.0,
-            Command::GoToEnd => *playhead = duration,
-            Command::PreviousFrame => *playhead = step_frames(*playhead, fps, -1, duration),
-            Command::NextFrame => *playhead = step_frames(*playhead, fps, 1, duration),
+            Command::GoToStart => self.timeline.playhead = 0.0,
+            Command::GoToEnd => self.timeline.playhead = self.project.duration(),
+            Command::PreviousFrame => {
+                let at = &mut self.timeline.playhead;
+                *at = step_frames(*at, self.project.settings.fps, -1, self.project.duration());
+            }
+            Command::NextFrame => {
+                let at = &mut self.timeline.playhead;
+                *at = step_frames(*at, self.project.settings.fps, 1, self.project.duration());
+            }
             Command::ProjectSettings => {
                 let dialog = ProjectSettingsDialog::new(&self.project.settings);
                 self.dialog = Dialog::ProjectSettings(dialog);
@@ -213,13 +226,6 @@ impl App {
         }
     }
 
-    fn split_at_playhead(&mut self) {
-        let at = self.timeline.playhead;
-        for id in split_targets(&self.project, self.timeline.selected_clip, at) {
-            self.project.split_clip(id, at);
-        }
-    }
-
     fn delete_selected_clip(&mut self) {
         if let Some(id) = self.timeline.selected_clip.take() {
             self.project.remove_clip(id);
@@ -236,11 +242,25 @@ impl App {
             Dialog::Settings(dialog) => match dialog.show(ctx) {
                 Outcome::Open => {}
                 Outcome::Cancelled => self.dialog = Dialog::None,
-                Outcome::Accepted(config) => {
-                    self.dialog = Dialog::None;
-                    self.apply_config(config);
-                }
+                Outcome::Accepted(config) => match self.unreadable_config.clone() {
+                    Some(path) => self.dialog = Dialog::OverwriteConfig(config, path),
+                    None => {
+                        self.dialog = Dialog::None;
+                        self.apply_config(config);
+                    }
+                },
             },
+            Dialog::OverwriteConfig(config, path) => {
+                match ui::dialogs::confirm_overwrite(ctx, path) {
+                    Outcome::Open => {}
+                    Outcome::Cancelled => self.dialog = Dialog::None,
+                    Outcome::Accepted(()) => {
+                        let config = config.clone();
+                        self.dialog = Dialog::None;
+                        self.apply_config(config);
+                    }
+                }
+            }
             Dialog::ProjectSettings(dialog) => match dialog.show(ctx) {
                 Outcome::Open => {}
                 Outcome::Cancelled => self.dialog = Dialog::None,
@@ -273,23 +293,22 @@ impl App {
 
     fn unsaved_changes(&mut self, ctx: &Context, action: Guarded) {
         let name = display_name(self.project_path.as_deref());
-        let Some(choice) = ui::dialogs::unsaved_changes(ctx, &name) else {
-            return;
+        let proceed = match ui::dialogs::unsaved_changes(ctx, &name) {
+            Outcome::Open => return,
+            Outcome::Cancelled => false,
+            Outcome::Accepted(UnsavedChoice::Save) => self.save(),
+            Outcome::Accepted(UnsavedChoice::Discard) => true,
         };
         self.dialog = Dialog::None;
-        let proceed = match choice {
-            UnsavedChoice::Save => self.save(),
-            UnsavedChoice::Discard => true,
-            UnsavedChoice::Cancel => false,
-        };
         if proceed {
             self.perform(action, ctx);
         }
     }
 
     fn apply_config(&mut self, config: AppConfig) {
-        if let Err(err) = config.save() {
-            self.report(format!("Saving settings: {err:#}"));
+        match config.save() {
+            Ok(()) => self.unreadable_config = None,
+            Err(err) => self.report(format!("Saving settings: {err:#}")),
         }
         let ffmpeg_changed = config.ffmpeg_path != self.config.ffmpeg_path;
         self.config = config;
@@ -303,14 +322,14 @@ impl App {
     }
 
     fn status_bar(&self, ui: &mut egui::Ui) {
-        let status = ui::status_bar::Status {
-            playhead: self.timeline.playhead,
-            duration: self.project.duration(),
-            selection: self.timeline.selection,
-            ffmpeg: &self.ffmpeg_status,
-            export_progress: self.export_fraction(),
-        };
-        egui::Panel::bottom("status").show(ui, |ui| ui::status_bar::show(ui, &status));
+        let duration = self.project.duration();
+        let timeline = &self.timeline;
+        egui::Panel::bottom("status").show(ui, |ui| {
+            let ffmpeg = &self.ffmpeg_status;
+            let progress = self.export_fraction();
+            let (playhead, selection) = (timeline.playhead, timeline.selection);
+            ui::status_bar::show(ui, playhead, duration, selection, ffmpeg, progress)
+        });
     }
 
     fn timeline_panel(&mut self, ui: &mut egui::Ui) -> TimelineResponse {
@@ -336,7 +355,6 @@ impl App {
             .show(ui, |ui| ui::viewer::show(ui, &self.previewer, placeholder));
     }
 
-    /// Turns finished edits into undo steps and keeps the preview at the playhead.
     fn settle(&mut self, timeline: &TimelineResponse) {
         if !timeline.interacting {
             self.history.commit(&self.project);
@@ -386,10 +404,8 @@ fn window_title(path: Option<&Path>, dirty: bool) -> String {
 }
 
 fn display_name(path: Option<&Path>) -> String {
-    path.and_then(Path::file_name)
-        .map_or("untitled".to_owned(), |name| {
-            name.to_string_lossy().into_owned()
-        })
+    path.and_then(file_name)
+        .unwrap_or_else(|| "untitled".to_owned())
 }
 
 #[cfg(test)]

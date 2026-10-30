@@ -1,6 +1,4 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// Module APIs are stubbed ahead of their implementations; drop once everything is wired up.
-#![allow(dead_code, unused_variables)]
 
 mod app;
 mod config;
@@ -8,6 +6,8 @@ mod ffmpeg;
 mod media;
 mod model;
 mod render;
+#[cfg(test)]
+mod test_support;
 mod ui;
 
 fn main() -> eframe::Result {

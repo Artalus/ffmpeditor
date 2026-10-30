@@ -1,23 +1,24 @@
-use std::collections::VecDeque;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::Context;
 
+use super::ExportStatus;
 use super::graph::{self, FrameRate, Target};
-use super::process::{self, GraphFile};
-use super::{ExportStatus, MediaInfos};
-use crate::ffmpeg::Ffmpeg;
+use super::process::{self, GraphFile, MAX_INLINE_COMMAND_LINE};
+use crate::ffmpeg::{self, Ffmpeg};
+use crate::media::MediaInfos;
 use crate::model::{Project, Span};
-
-const STDERR_TAIL_LINES: usize = 30;
 
 pub struct ExportJob {
     process: Mutex<Process>,
     progress: Arc<Mutex<f32>>,
-    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    stderr_tail: Arc<Mutex<String>>,
+    output: PathBuf,
 }
 
 struct Process {
@@ -47,13 +48,8 @@ pub fn export_args(
             input_lookahead: 0.0,
         },
     );
-    let mut args = vec!["-loglevel".into(), "warning".into()];
-    args.extend(graph.inputs);
+    let mut args = graph.into_args("warning");
     args.extend([
-        "-filter_complex".into(),
-        graph.filter,
-        "-map".into(),
-        "[v]".into(),
         "-map".into(),
         "[a]".into(),
         "-c:v".into(),
@@ -84,15 +80,21 @@ pub fn export_args(
 
 impl ExportJob {
     /// `duration` is the length of the rendered range, used to compute progress.
-    pub fn start(ffmpeg: &Ffmpeg, args: Vec<String>, duration: f64) -> anyhow::Result<Self> {
-        let (mut cmd, graph_file) = process::command(ffmpeg, &args)?;
+    /// `output` is the file `args` write; cancelling deletes it.
+    pub fn start(
+        ffmpeg: &Ffmpeg,
+        args: Vec<String>,
+        duration: f64,
+        output: &Path,
+    ) -> anyhow::Result<Self> {
+        let (mut cmd, graph_file) = process::command(ffmpeg, &args, MAX_INLINE_COMMAND_LINE)?;
         let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("running {}", ffmpeg.ffmpeg.display()))?;
         let progress = Arc::new(Mutex::new(0.0));
-        let stderr_tail = Arc::new(Mutex::new(VecDeque::new()));
+        let stderr_tail = Arc::<Mutex<String>>::default();
         let readers = [
             read_progress(child.stdout.take().unwrap(), duration, progress.clone()),
             read_stderr(child.stderr.take().unwrap(), stderr_tail.clone()),
@@ -106,6 +108,7 @@ impl ExportJob {
             }),
             progress,
             stderr_tail,
+            output: output.to_owned(),
         })
     }
 
@@ -118,7 +121,10 @@ impl ExportJob {
             // Readers are still draining the pipes, the stderr tail may be incomplete.
             Ok(Some(_)) if !process.readers.iter().all(JoinHandle::is_finished) => None,
             Ok(Some(exit)) if exit.success() => Some(ExportStatus::Finished),
-            Ok(Some(exit)) => Some(ExportStatus::Failed(self.failure(&exit.to_string()))),
+            Ok(Some(exit)) => Some(ExportStatus::Failed(ffmpeg::failure(
+                exit,
+                &self.stderr_tail.lock().unwrap(),
+            ))),
             Ok(None) => None,
             Err(e) => Some(ExportStatus::Failed(format!("waiting for ffmpeg: {e}"))),
         };
@@ -139,15 +145,8 @@ impl ExportJob {
             let _ = process.child.kill();
             let _ = process.child.wait();
             process.outcome = Some(ExportStatus::Cancelled);
-        }
-    }
-
-    fn failure(&self, exit: &str) -> String {
-        let tail = self.stderr_tail.lock().unwrap();
-        if tail.is_empty() {
-            format!("ffmpeg failed: {exit}")
-        } else {
-            Vec::from(tail.clone()).join("\n")
+            let output = self.output.clone();
+            thread::spawn(move || remove_partial(&output));
         }
     }
 }
@@ -158,9 +157,22 @@ impl Drop for ExportJob {
     }
 }
 
+/// A launcher shim (scoop) in between kills the real ffmpeg only after it exits itself,
+/// so the output may stay locked for a moment.
+fn remove_partial(output: &Path) {
+    for _ in 0..20 {
+        match std::fs::remove_file(output) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                thread::sleep(Duration::from_millis(100))
+            }
+            _ => return,
+        }
+    }
+}
+
 fn read_progress(stdout: ChildStdout, duration: f64, progress: Arc<Mutex<f32>>) -> JoinHandle<()> {
     thread::spawn(move || {
-        for line in process::lines(stdout) {
+        for line in ffmpeg::lines(stdout) {
             if let Some(fraction) = progress_fraction(&line, duration) {
                 *progress.lock().unwrap() = fraction;
             }
@@ -168,16 +180,8 @@ fn read_progress(stdout: ChildStdout, duration: f64, progress: Arc<Mutex<f32>>) 
     })
 }
 
-fn read_stderr(stderr: ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        for line in process::lines(stderr).filter(|line| !line.is_empty()) {
-            let mut tail = tail.lock().unwrap();
-            if tail.len() == STDERR_TAIL_LINES {
-                tail.pop_front();
-            }
-            tail.push_back(line);
-        }
-    })
+fn read_stderr(stderr: ChildStderr, tail: Arc<Mutex<String>>) -> JoinHandle<()> {
+    thread::spawn(move || *tail.lock().unwrap() = ffmpeg::stderr_tail(stderr))
 }
 
 fn progress_fraction(line: &str, duration: f64) -> Option<f32> {

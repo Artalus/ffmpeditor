@@ -3,7 +3,7 @@
 use super::layout::TimeAxis;
 use crate::model::{ClipId, Project, Span, Track};
 
-pub const EDGE_GRAB: f32 = 6.0;
+const EDGE_GRAB: f32 = 6.0;
 pub const SNAP_DISTANCE: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,14 +11,6 @@ pub enum Zone {
     Body,
     Start,
     End,
-}
-
-/// A clip's horizontal screen extent within one lane.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClipX {
-    pub id: ClipId,
-    pub x0: f32,
-    pub x1: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,17 +30,18 @@ pub struct Snapping {
 
 /// Edges win over bodies so overlapped (crossfaded) clips stay trimmable;
 /// otherwise the last clip in `clips` (drawn on top) wins.
-pub fn hit_clip(clips: &[ClipX], x: f32) -> Option<(ClipId, Zone)> {
+/// `clips` are `(id, x0, x1)`: horizontal screen extents within one lane.
+pub fn hit_clip(clips: &[(ClipId, f32, f32)], x: f32) -> Option<(ClipId, Zone)> {
     let mut edge: Option<(f32, ClipId, Zone)> = None;
     let mut body = None;
-    for clip in clips {
-        let Some((zone, distance)) = zone_at(clip.x0, clip.x1, x) else {
+    for &(id, x0, x1) in clips {
+        let Some((zone, distance)) = zone_at(x0, x1, x) else {
             continue;
         };
         if zone == Zone::Body {
-            body = Some(clip.id);
+            body = Some(id);
         } else if edge.is_none_or(|(best, ..)| distance < best) {
-            edge = Some((distance, clip.id, zone));
+            edge = Some((distance, id, zone));
         }
     }
     edge.map(|(_, id, zone)| (id, zone))
@@ -118,7 +111,6 @@ impl ClipDrag {
     }
 }
 
-/// Range selected on the ruler between the press `anchor` and the pointer.
 pub fn range_selection(project: &Project, anchor: f64, pointer: f64, distance: f64) -> Span {
     let targets = snap_targets(project, None, None);
     Span::new(
@@ -139,7 +131,7 @@ pub fn opposite_edge(axis: &TimeAxis, selection: Span, x: f32) -> Option<f64> {
     })
 }
 
-pub fn snap_targets(project: &Project, exclude: Option<ClipId>, playhead: Option<f64>) -> Vec<f64> {
+fn snap_targets(project: &Project, exclude: Option<ClipId>, playhead: Option<f64>) -> Vec<f64> {
     let edges = project
         .clips
         .iter()
@@ -148,12 +140,12 @@ pub fn snap_targets(project: &Project, exclude: Option<ClipId>, playhead: Option
     [0.0].into_iter().chain(playhead).chain(edges).collect()
 }
 
-pub fn snap_time(t: f64, targets: &[f64], distance: f64) -> f64 {
+fn snap_time(t: f64, targets: &[f64], distance: f64) -> f64 {
     nearest(t, targets, distance).unwrap_or(t)
 }
 
 /// Snaps whichever edge of `start..start + duration` is closer to a target; returns the new start.
-pub fn snap_span(start: f64, duration: f64, targets: &[f64], distance: f64) -> f64 {
+fn snap_span(start: f64, duration: f64, targets: &[f64], distance: f64) -> f64 {
     let by_start = nearest(start, targets, distance);
     let by_end = nearest(start + duration, targets, distance).map(|t| t - duration);
     [by_start, by_end]
@@ -174,25 +166,15 @@ fn nearest(t: f64, targets: &[f64], distance: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn clip_x(id: u64, x0: f32, x1: f32) -> ClipX {
-        ClipX {
-            id: ClipId(id),
-            x0,
-            x1,
-        }
-    }
+    use crate::test_support::project;
 
     /// V1: [0, 10) and [20, 30); A1: [5, 8).
-    fn project() -> (Project, [ClipId; 3]) {
-        let mut project = Project::default();
-        let source = project.add_source("a.mp4".into());
-        let a = project.append_clip(source, Track::Video(0), 10.0);
-        let b = project.append_clip(source, Track::Video(0), 10.0);
-        project.move_clip(b, 20.0, Track::Video(0));
-        let c = project.append_clip(source, Track::Audio(0), 3.0);
-        project.move_clip(c, 5.0, Track::Audio(0));
-        (project, [a, b, c])
+    fn sample() -> (Project, [ClipId; 3]) {
+        project([
+            (Track::Video(0), 0.0, 10.0),
+            (Track::Video(0), 20.0, 10.0),
+            (Track::Audio(0), 5.0, 3.0),
+        ])
     }
 
     const SNAP: Snapping = Snapping {
@@ -213,7 +195,7 @@ mod tests {
 
     #[test]
     fn edges_beat_overlapping_bodies() {
-        let clips = [clip_x(1, 0.0, 100.0), clip_x(2, 80.0, 200.0)];
+        let clips = [(ClipId(1), 0.0, 100.0), (ClipId(2), 80.0, 200.0)];
         assert_eq!(hit_clip(&clips, 50.0), Some((ClipId(1), Zone::Body)));
         assert_eq!(hit_clip(&clips, 90.0), Some((ClipId(2), Zone::Body)));
         assert_eq!(hit_clip(&clips, 97.0), Some((ClipId(1), Zone::End)));
@@ -232,7 +214,7 @@ mod tests {
 
     #[test]
     fn targets_skip_dragged_clip() {
-        let (project, [a, ..]) = project();
+        let (project, [a, ..]) = sample();
         let mut targets = snap_targets(&project, Some(a), Some(15.0));
         targets.sort_by(f64::total_cmp);
         assert_eq!(targets, [0.0, 5.0, 8.0, 15.0, 20.0, 30.0]);
@@ -240,7 +222,7 @@ mod tests {
 
     #[test]
     fn move_keeps_grab_offset_and_snaps() {
-        let (mut project, [a, ..]) = project();
+        let (mut project, [a, ..]) = sample();
         let drag = ClipDrag::begin(&project, a, Zone::Body, 4.0).unwrap();
         drag.apply(&mut project, 6.0, None, 10.0, SNAP);
         assert_eq!(project.clip(a).unwrap().start, 2.0);
@@ -256,7 +238,7 @@ mod tests {
 
     #[test]
     fn move_is_clamped_at_zero() {
-        let (mut project, [_, b, _]) = project();
+        let (mut project, [_, b, _]) = sample();
         let drag = ClipDrag::begin(&project, b, Zone::Body, 25.0).unwrap();
         drag.apply(&mut project, 2.0, None, 10.0, SNAP);
         assert_eq!(project.clip(b).unwrap().start, 0.0);
@@ -264,7 +246,7 @@ mod tests {
 
     #[test]
     fn trims_snap_and_respect_source() {
-        let (mut project, [_, b, _]) = project();
+        let (mut project, [_, b, _]) = sample();
         project.clip_mut(b).unwrap().source_in = 10.0;
         let start = ClipDrag::begin(&project, b, Zone::Start, 20.5).unwrap();
         start.apply(&mut project, 15.8, Some(Track::Video(3)), 20.0, SNAP);
@@ -281,7 +263,7 @@ mod tests {
 
     #[test]
     fn range_snaps_to_clip_edges() {
-        let (project, _) = project();
+        let (project, _) = sample();
         assert_eq!(
             range_selection(&project, 10.2, 3.0, 0.5),
             Span::new(3.0, 10.0)

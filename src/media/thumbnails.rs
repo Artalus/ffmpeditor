@@ -2,9 +2,11 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::process::Command;
 
-use super::{THUMBNAIL_HEIGHT, VideoInfo, read_full};
+use super::VideoInfo;
 use crate::ffmpeg::Ffmpeg;
 
+/// Thumbnail textures are this tall; width follows the source's aspect ratio.
+const THUMBNAIL_HEIGHT: u32 = 72;
 /// Long recordings get sparser thumbnails instead of more of them.
 const MAX_THUMBNAILS: f64 = 300.0;
 const MIN_INTERVAL_MS: u64 = 1000;
@@ -67,17 +69,22 @@ pub fn read_frames(
     mut on_frame: impl FnMut(egui::ColorImage),
 ) -> io::Result<()> {
     let size = [layout.width as usize, layout.height as usize];
-    let mut frame = vec![0; size[0] * size[1] * 4];
-    while read_full(&mut rgba, &mut frame)? == frame.len() {
+    let len = size[0] * size[1] * 4;
+    let mut frame = Vec::with_capacity(len);
+    loop {
+        frame.clear();
+        rgba.by_ref().take(len as u64).read_to_end(&mut frame)?;
+        if frame.len() < len {
+            return Ok(());
+        }
         on_frame(egui::ColorImage::from_rgba_unmultiplied(size, &frame));
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::{self, TestMedia};
+    use crate::test_support::{self, fixtures, run_ok};
 
     fn video(width: u32, height: u32) -> VideoInfo {
         VideoInfo {
@@ -137,12 +144,9 @@ mod tests {
 
     #[test]
     fn one_thumbnail_per_second_from_keyframes() {
-        let media = TestMedia::new("thumbnails");
         let layout = Layout::new(3.0, &video(320, 240));
-        let output = command(&test_media::ffmpeg(), &media.video_with_audio(), &layout)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        let cmd = &mut command(&test_support::ffmpeg(), &fixtures().testsrc, &layout);
+        let output = run_ok(cmd);
         let mut frames = Vec::new();
         read_frames(output.stdout.as_slice(), &layout, |frame| {
             frames.push(frame)

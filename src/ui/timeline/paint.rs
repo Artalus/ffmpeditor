@@ -1,16 +1,13 @@
-//! Drawing of ruler, track headers, lanes with clips, selection and playhead.
-
 use egui::{
     Align2, Color32, FontId, Mesh, Painter, Pos2, Rangef, Rect, Shape, Stroke, StrokeKind, Visuals,
     pos2, vec2,
 };
 
 use super::TimelineState;
-use super::layout::{
-    Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height, crossfades, format_time,
-};
+use super::layout::{Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height};
 use crate::media::MediaCache;
 use crate::model::{Clip, Project};
+use crate::ui::format_time;
 
 const CLIP_ROUNDING: f32 = 3.0;
 const VIDEO_CLIP: Color32 = Color32::from_rgb(50, 80, 135);
@@ -44,12 +41,11 @@ pub fn timeline(painter: &Painter, scene: &Scene) {
     lanes(&painter.with_clip_rect(areas.rows), scene);
     scrollbar(painter, scene);
     header(&painter.with_clip_rect(areas.header), scene);
-    ruler(&painter.with_clip_rect(areas.ruler), scene);
+    let selection = selection_x(scene);
+    ruler(&painter.with_clip_rect(areas.ruler), scene, selection);
     corner(&painter.with_clip_rect(areas.corner), scene);
-    markers(
-        &painter.with_clip_rect(areas.ruler.union(areas.rows)),
-        scene,
-    );
+    let all = painter.with_clip_rect(areas.ruler.union(areas.rows));
+    markers(&all, scene, selection);
 }
 
 fn lanes(painter: &Painter, scene: &Scene) {
@@ -64,7 +60,7 @@ fn lanes(painter: &Painter, scene: &Scene) {
         for clip in &clips {
             clip_in_lane(painter, scene, lane, rect, clip);
         }
-        for overlap in crossfades(&clips) {
+        for overlap in scene.project.crossfades(lane.track) {
             let axis = &scene.view.axis;
             cross_mark(painter, axis.x(overlap.start), axis.x(overlap.end), rect);
         }
@@ -141,11 +137,10 @@ fn thumbnails(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
     if tile < 1.0 {
         return;
     }
-    let visible = painter.clip_rect().x_range();
-    let end = visible.max.min(rect.right());
-    let first = ((visible.min - rect.left()) / tile).floor().max(0.0);
+    let visible = visible_span(painter, rect);
+    let first = ((visible.min - rect.left()) / tile).floor();
     let mut x = rect.left() + first * tile;
-    while x < end {
+    while x < visible.max {
         let at = clip
             .timeline_to_source(scene.view.axis.time(x))
             .clamp(clip.source_in, clip.source_out());
@@ -166,11 +161,10 @@ fn waveform(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
     let axis = &scene.view.axis;
     let half = rect.height() / 2.0 - 2.0;
     let gain = clip.audio.volume as f32;
-    let visible = painter.clip_rect().x_range();
-    let end = visible.max.min(rect.right());
+    let visible = visible_span(painter, rect);
     let mut mesh = Mesh::default();
-    let mut x = visible.min.max(rect.left()).floor();
-    while x < end {
+    let mut x = visible.min.floor();
+    while x < visible.max {
         let from = clip.timeline_to_source(axis.time(x));
         let to = clip.timeline_to_source(axis.time(x + 1.0));
         let muted = clip.audio.muted || clip.audio.mute_regions.iter().any(|r| r.contains(from));
@@ -180,6 +174,11 @@ fn waveform(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
         x += 1.0;
     }
     painter.add(Shape::mesh(mesh));
+}
+
+/// Horizontal part of `rect` the painter shows.
+fn visible_span(painter: &Painter, rect: Rect) -> Rangef {
+    painter.clip_rect().x_range().intersection(rect.x_range())
 }
 
 fn mute_regions(painter: &Painter, axis: &TimeAxis, rect: Rect, clip: &Clip) {
@@ -298,12 +297,12 @@ fn header(painter: &Painter, scene: &Scene) {
     painter.vline(area.right() - 0.5, area.y_range(), separator);
 }
 
-fn ruler(painter: &Painter, scene: &Scene) {
+fn ruler(painter: &Painter, scene: &Scene, selection: Option<Rangef>) {
     let visuals = scene.visuals;
     let rect = scene.areas.ruler;
     let axis = &scene.view.axis;
     painter.rect_filled(rect, 0.0, visuals.panel_fill);
-    if let Some(x) = selection_x(painter, scene) {
+    if let Some(x) = selection {
         let band = Rect::from_x_y_ranges(x, rect.y_range());
         painter.rect_filled(band, 0.0, visuals.selection.bg_fill.gamma_multiply(0.6));
     }
@@ -314,7 +313,7 @@ fn ruler(painter: &Painter, scene: &Scene) {
         let height = rect.height() * if major { 0.5 } else { 0.2 };
         painter.vline(x, rect.bottom() - height..=rect.bottom(), stroke);
         if major {
-            let text = format_time(t, ticks.major);
+            let text = format_time(t, ticks.label_decimals(), false);
             let pos = pos2(x + 3.0, rect.top() + 1.0);
             painter.text(
                 pos,
@@ -332,7 +331,7 @@ fn corner(painter: &Painter, scene: &Scene) {
     let visuals = scene.visuals;
     let rect = scene.areas.corner;
     painter.rect_filled(rect, 0.0, visuals.panel_fill);
-    let text = format_time(scene.state.playhead, 0.01);
+    let text = format_time(scene.state.playhead, 2, false);
     let font = FontId::monospace(11.0);
     painter.text(
         rect.center(),
@@ -344,10 +343,10 @@ fn corner(painter: &Painter, scene: &Scene) {
 }
 
 /// The ruler draws its part of the selection band itself, beneath the tick labels.
-fn markers(painter: &Painter, scene: &Scene) {
+fn markers(painter: &Painter, scene: &Scene, selection: Option<Rangef>) {
     let ruler = scene.areas.ruler;
     let rows = scene.areas.rows;
-    if let Some(x) = selection_x(painter, scene) {
+    if let Some(x) = selection {
         let band = Rect::from_x_y_ranges(x, rows.y_range());
         let fill = scene.visuals.selection.bg_fill.gamma_multiply(0.2);
         painter.rect_filled(band, 0.0, fill);
@@ -364,13 +363,11 @@ fn markers(painter: &Painter, scene: &Scene) {
     }
 }
 
-fn selection_x(painter: &Painter, scene: &Scene) -> Option<Rangef> {
+/// Screen x range of the selection within the view, so far-off edges do not lose f32 precision.
+fn selection_x(scene: &Scene) -> Option<Rangef> {
     let selection = scene.state.selection?;
-    let view_x = painter.clip_rect().x_range().expand(2.0);
+    let view_x = scene.areas.rows.x_range().expand(2.0);
     let axis = &scene.view.axis;
-    let x = Rangef::new(
-        axis.x(selection.start).max(view_x.min),
-        axis.x(selection.end).min(view_x.max),
-    );
+    let x = Rangef::new(axis.x(selection.start), axis.x(selection.end)).intersection(view_x);
     (x.span() > 0.0).then_some(x)
 }

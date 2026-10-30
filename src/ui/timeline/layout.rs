@@ -1,16 +1,16 @@
-//! Pure timeline geometry: time <-> x mapping, track rows, ruler ticks.
+//! Pure timeline geometry: screen regions, time <-> x mapping, track lanes, ruler ticks.
 
 use egui::{Pos2, Rect, pos2};
 
-use crate::model::{Clip, Project, Span, Track};
+use crate::model::{Clip, Project, Track};
 
-pub const HEADER_WIDTH: f32 = 70.0;
-pub const RULER_HEIGHT: f32 = 24.0;
-pub const VIDEO_LANE_HEIGHT: f32 = 44.0;
-pub const AUDIO_LANE_HEIGHT: f32 = 30.0;
-pub const TRACK_GAP: f32 = 3.0;
-pub const MIN_PIXELS_PER_SECOND: f32 = 0.5;
-pub const MAX_PIXELS_PER_SECOND: f32 = 2000.0;
+const HEADER_WIDTH: f32 = 70.0;
+const RULER_HEIGHT: f32 = 24.0;
+const VIDEO_LANE_HEIGHT: f32 = 44.0;
+const AUDIO_LANE_HEIGHT: f32 = 30.0;
+const TRACK_GAP: f32 = 3.0;
+const MIN_PIXELS_PER_SECOND: f32 = 0.5;
+const MAX_PIXELS_PER_SECOND: f32 = 2000.0;
 
 const MIN_LABEL_SPACING: f32 = 80.0;
 const MIN_TICK_SPACING: f32 = 8.0;
@@ -19,7 +19,6 @@ const TICK_STEPS: [f64; 22] = [
     900.0, 1800.0, 3600.0, 7200.0, 18000.0, 36000.0,
 ];
 
-/// Screen regions of the widget: ruler on top, track names on the left, rows below the ruler.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Areas {
     pub corner: Rect,
@@ -38,8 +37,8 @@ pub struct TimeAxis {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackCounts {
-    pub video: u32,
-    pub audio: u32,
+    video: u32,
+    audio: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,23 +53,21 @@ pub struct Lane {
     pub track: Track,
     pub kind: LaneKind,
     /// Relative to the top of the rows content.
-    pub top: f32,
-    pub height: f32,
+    top: f32,
+    height: f32,
 }
 
-/// Screen placement of the rows: lanes plus the scroll offsets.
 pub struct View {
     pub axis: TimeAxis,
     pub lanes: Vec<Lane>,
     pub rows: Rect,
-    /// Screen y of the rows content top (rows top minus vertical scroll).
     pub content_top: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ticks {
-    pub major: f64,
-    pub minor: f64,
+    major: f64,
+    minor: f64,
 }
 
 impl Areas {
@@ -181,7 +178,7 @@ pub fn content_height(lanes: &[Lane]) -> f32 {
 }
 
 impl Lane {
-    pub fn bottom(&self) -> f32 {
+    fn bottom(&self) -> f32 {
         self.top + self.height
     }
 
@@ -224,16 +221,12 @@ impl View {
             .map(|l| l.track)
     }
 
-    pub fn visible_time(&self) -> (f64, f64) {
-        (
-            self.axis.time(self.rows.left()),
-            self.axis.time(self.rows.right()),
-        )
-    }
-
     /// Clips on `track` within view, in draw order (later on top).
     pub fn visible_clips<'p>(&self, project: &'p Project, track: Track) -> Vec<&'p Clip> {
-        let (start, end) = self.visible_time();
+        let (start, end) = (
+            self.axis.time(self.rows.left()),
+            self.axis.time(self.rows.right()),
+        );
         let mut clips: Vec<_> = project
             .clips_on(track)
             .filter(|c| c.end() >= start && c.start <= end)
@@ -241,20 +234,6 @@ impl View {
         clips.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.id.cmp(&b.id)));
         clips
     }
-}
-
-/// Overlapping parts of `clips` sorted by start; rendered as crossfades.
-pub fn crossfades(clips: &[&Clip]) -> Vec<Span> {
-    let mut spans = Vec::new();
-    for (i, a) in clips.iter().enumerate() {
-        for b in clips[i + 1..].iter().take_while(|b| b.start < a.end()) {
-            let span = Span::new(b.start, a.end().min(b.end()));
-            if !span.is_empty() {
-                spans.push(span);
-            }
-        }
-    }
-    spans
 }
 
 impl Ticks {
@@ -271,6 +250,11 @@ impl Ticks {
         Self { major, minor }
     }
 
+    /// Fractional digits that tell major ticks apart: none for whole seconds, then one per decade.
+    pub fn label_decimals(self) -> usize {
+        usize::from(self.major < 1.0) + usize::from(self.major < 0.1)
+    }
+
     /// `(time, is_major)` for every tick within `start..=end`.
     pub fn within(self, start: f64, end: f64) -> impl Iterator<Item = (f64, bool)> {
         let per_major = (self.major / self.minor).round() as i64;
@@ -285,44 +269,13 @@ fn divides(major: f64, minor: f64) -> bool {
     (ratio - ratio.round()).abs() < 1e-6
 }
 
-/// `m:ss` or `h:mm:ss`, with as many decimals as a tick `step` needs.
-pub fn format_time(t: f64, step: f64) -> String {
-    let decimals: usize = if step >= 1.0 {
-        0
-    } else if step >= 0.1 {
-        1
-    } else {
-        2
-    };
-    let scale = 10_i64.pow(decimals as u32);
-    let total = (t.max(0.0) * scale as f64).round() as i64;
-    let (secs, frac) = (total / scale, total % scale);
-    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-    let mut text = if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    };
-    if decimals > 0 {
-        text += &format!(".{frac:0decimals$}");
-    }
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Clip;
-    use crate::model::{ClipId, SourceId};
+    use crate::test_support::project;
 
-    fn project_with(tracks: &[Track]) -> Project {
-        let mut project = Project::default();
-        for (i, &track) in tracks.iter().enumerate() {
-            project
-                .clips
-                .push(Clip::new(ClipId(i as u64), SourceId(1), track, 0.0, 1.0));
-        }
-        project
+    fn counts_of<const N: usize>(tracks: [Track; N]) -> TrackCounts {
+        TrackCounts::of(&project(tracks.map(|track| (track, 0.0, 1.0))).0)
     }
 
     #[test]
@@ -357,9 +310,9 @@ mod tests {
     fn track_counts_cover_used_tracks_only() {
         let empty = TrackCounts::of(&Project::default());
         assert_eq!(empty, TrackCounts { video: 1, audio: 1 });
-        let used = TrackCounts::of(&project_with(&[Track::Video(0), Track::Video(2)]));
+        let used = counts_of([Track::Video(0), Track::Video(2)]);
         assert_eq!(used, TrackCounts { video: 3, audio: 1 });
-        let audio = TrackCounts::of(&project_with(&[Track::Audio(0), Track::Audio(1)]));
+        let audio = counts_of([Track::Audio(0), Track::Audio(1)]);
         assert_eq!(audio, TrackCounts { video: 1, audio: 2 });
     }
 
@@ -435,38 +388,20 @@ mod tests {
 
     #[test]
     fn visible_clips_are_culled_and_ordered() {
-        let mut project = project_with(&[Track::Video(0); 4]);
-        for (clip, start) in project.clips.iter_mut().zip([300.0, 50.0, -600.0, 50.0]) {
-            clip.start = start;
-            clip.duration = 100.0;
-        }
-        project.clips[3].id = ClipId(0);
-        project.clips[0].id = ClipId(3);
-        let ids: Vec<_> = view(TrackCounts { video: 1, audio: 1 })
-            .visible_clips(&project, Track::Video(0))
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert_eq!(ids, [ClipId(0), ClipId(1), ClipId(3)]);
-    }
-
-    #[test]
-    fn crossfades_between_overlapping_clips() {
-        let mut project = project_with(&[Track::Video(0); 3]);
-        for (clip, (start, duration)) in
-            project
-                .clips
-                .iter_mut()
-                .zip([(0.0, 10.0), (8.0, 1.0), (9.5, 5.0)])
-        {
-            clip.start = start;
-            clip.duration = duration;
-        }
-        let clips: Vec<_> = project.clips.iter().collect();
-        assert_eq!(
-            crossfades(&clips),
-            [Span::new(8.0, 9.0), Span::new(9.5, 10.0)]
-        );
+        let (mut project, [x, y, _, w, _]) = project([
+            (Track::Video(0), 300.0, 100.0),
+            (Track::Video(0), 250.0, 100.0),
+            (Track::Video(0), 0.0, 100.0),
+            (Track::Video(0), 250.0, 100.0),
+            (Track::Video(0), 800.0, 100.0),
+        ]);
+        // Stored against id order, so only the explicit tie-break puts y before w.
+        project.clips.reverse();
+        let mut view = view(TrackCounts { video: 1, audio: 1 });
+        view.axis.scroll = 200.0;
+        let visible = view.visible_clips(&project, Track::Video(0));
+        let ids: Vec<_> = visible.iter().map(|c| c.id).collect();
+        assert_eq!(ids, [y, w, x]);
     }
 
     #[test]
@@ -534,12 +469,14 @@ mod tests {
     }
 
     #[test]
-    fn time_labels() {
-        assert_eq!(format_time(0.0, 1.0), "0:00");
-        assert_eq!(format_time(75.0, 5.0), "1:15");
-        assert_eq!(format_time(3725.0, 60.0), "1:02:05");
-        assert_eq!(format_time(1.5, 0.5), "0:01.5");
-        assert_eq!(format_time(61.25, 0.05), "1:01.25");
-        assert_eq!(format_time(59.99, 0.1), "1:00.0");
+    fn labels_get_decimals_below_a_second() {
+        let decimals = |step| {
+            Ticks {
+                major: step,
+                minor: step,
+            }
+            .label_decimals()
+        };
+        assert_eq!([5.0, 1.0, 0.5, 0.1, 0.05].map(decimals), [0, 0, 1, 1, 2]);
     }
 }

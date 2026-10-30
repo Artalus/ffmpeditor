@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
-
 use super::App;
 use super::history::History;
-use crate::media::MediaInfo;
-use crate::model::{Project, Track};
+use crate::model::Project;
 use crate::ui::timeline::TimelineState;
+use crate::ui::{file_name, with_default_ext};
 
-const PROJECT_EXTENSIONS: &[&str] = &["toml"];
+const PROJECT_EXT: &str = "toml";
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "flv", "ts"];
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "m4a", "opus", "aac"];
 
@@ -20,7 +18,7 @@ impl App {
     pub(super) fn open(&mut self) {
         let Some(path) = self
             .file_dialog()
-            .add_filter("ffmpeditor project", PROJECT_EXTENSIONS)
+            .add_filter("ffmpeditor project", &[PROJECT_EXT])
             .pick_file()
         else {
             return;
@@ -43,23 +41,17 @@ impl App {
         let name = self
             .project_path
             .as_deref()
-            .and_then(Path::file_name)
-            .map_or("project.toml".to_owned(), |name| {
-                name.to_string_lossy().into_owned()
-            });
-        let Some(mut path) = self
+            .and_then(file_name)
+            .unwrap_or_else(|| format!("project.{PROJECT_EXT}"));
+        let Some(path) = self
             .file_dialog()
-            .add_filter("ffmpeditor project", PROJECT_EXTENSIONS)
+            .add_filter("ffmpeditor project", &[PROJECT_EXT])
             .set_file_name(name)
             .save_file()
         else {
             return false;
         };
-        // Not every platform's dialog appends the filter's extension to a bare name.
-        if path.extension().is_none() {
-            path.set_extension(PROJECT_EXTENSIONS[0]);
-        }
-        self.save_to(path)
+        self.save_to(with_default_ext(path, PROJECT_EXT))
     }
 
     pub(super) fn import(&mut self) {
@@ -131,67 +123,14 @@ impl App {
     fn import_file(&mut self, path: &Path) -> anyhow::Result<()> {
         let known = self.project.sources.iter().any(|s| s.path == path);
         let id = self.project.add_source(path.to_path_buf());
-        let placed = self
-            .media
-            .add(id, path)
-            .and_then(|info| placement(&info))
-            .map(|(track, duration)| {
-                self.project.append_clip(id, track, duration);
-            });
+        let placed = self.media.add(id, path).and_then(|info| {
+            let track = info.default_track()?;
+            self.project.append_clip(id, track, info.duration);
+            Ok(())
+        });
         if placed.is_err() && !known {
-            self.project.sources.retain(|s| s.id != id);
+            self.project.remove_source(id);
         }
         placed
-    }
-}
-
-/// Track and length of a freshly imported clip: video goes to V1 (bringing its audio along), audio-only to A1.
-fn placement(info: &MediaInfo) -> anyhow::Result<(Track, f64)> {
-    if info.duration <= 0.0 {
-        bail!("unknown duration");
-    }
-    let track = match (&info.video, info.has_audio) {
-        (Some(_), _) => Track::Video(0),
-        (None, true) => Track::Audio(0),
-        (None, false) => bail!("no video or audio stream"),
-    };
-    Ok((track, info.duration))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::media::VideoInfo;
-
-    fn info(video: bool, has_audio: bool, duration: f64) -> MediaInfo {
-        MediaInfo {
-            duration,
-            video: video.then_some(VideoInfo {
-                width: 1920,
-                height: 1080,
-                fps: 60.0,
-            }),
-            has_audio,
-        }
-    }
-
-    #[test]
-    fn video_goes_to_first_video_track() {
-        let (track, duration) = placement(&info(true, true, 12.5)).unwrap();
-        assert_eq!((track, duration), (Track::Video(0), 12.5));
-        let (track, _) = placement(&info(true, false, 1.0)).unwrap();
-        assert_eq!(track, Track::Video(0));
-    }
-
-    #[test]
-    fn audio_only_goes_to_first_audio_track() {
-        let (track, _) = placement(&info(false, true, 3.0)).unwrap();
-        assert_eq!(track, Track::Audio(0));
-    }
-
-    #[test]
-    fn unusable_media_is_rejected() {
-        assert!(placement(&info(false, false, 3.0)).is_err());
-        assert!(placement(&info(true, true, 0.0)).is_err());
     }
 }

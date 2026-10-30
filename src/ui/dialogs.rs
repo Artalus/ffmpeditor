@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use egui::{
-    Align, Align2, Context, Id, Key, Label, Layout, Modal, Modifiers, ScrollArea, TextEdit,
-};
+use egui::{Align, Align2, Context, Id, Label, Layout, Modal, ScrollArea, TextEdit};
 
 use crate::config::AppConfig;
 use crate::ffmpeg::Ffmpeg;
@@ -13,11 +11,9 @@ pub enum Outcome<T> {
     Accepted(T),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UnsavedChoice {
     Save,
     Discard,
-    Cancel,
 }
 
 pub struct SettingsDialog {
@@ -25,32 +21,24 @@ pub struct SettingsDialog {
     test: Option<Result<String, String>>,
 }
 
-pub fn unsaved_changes(ctx: &Context, project_name: &str) -> Option<UnsavedChoice> {
-    let outcome = modal(ctx, "Unsaved changes", |ui| {
+pub fn unsaved_changes(ctx: &Context, project_name: &str) -> Outcome<UnsavedChoice> {
+    modal(ctx, "Unsaved changes", |ui| {
         ui.label(format!("Save changes to {project_name}?"));
-        ui.separator();
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Cancel").clicked() {
-                return Outcome::Cancelled;
-            }
-            if ui.button("Discard").clicked() {
-                return Outcome::Accepted(UnsavedChoice::Discard);
-            }
-            if ui.button("Save").clicked() {
-                return Outcome::Accepted(UnsavedChoice::Save);
-            }
-            Outcome::Open
-        })
-        .inner
-    });
-    match outcome {
-        Outcome::Open => None,
-        Outcome::Cancelled => Some(UnsavedChoice::Cancel),
-        Outcome::Accepted(choice) => Some(choice),
-    }
+        let buttons = [
+            ("Discard", Some(UnsavedChoice::Discard)),
+            ("Save", Some(UnsavedChoice::Save)),
+        ];
+        confirm_buttons(ui, buttons)
+    })
 }
 
-/// Non-blocking list of messages, each dismissable.
+pub fn confirm_overwrite(ctx: &Context, path: &Path) -> Outcome<()> {
+    modal(ctx, "Unreadable config", |ui| {
+        ui.label(format!("Overwrite unreadable config {}?", path.display()));
+        confirm_buttons(ui, [("Overwrite", Some(()))])
+    })
+}
+
 pub fn errors(ctx: &Context, errors: &mut Vec<String>) {
     if errors.is_empty() {
         return;
@@ -122,13 +110,10 @@ impl SettingsDialog {
                 }
                 None => {}
             }
-            match confirm_buttons(ui, "OK", !self.path().as_os_str().is_empty()) {
-                Some(true) => Outcome::Accepted(AppConfig {
-                    ffmpeg_path: self.path().into(),
-                }),
-                Some(false) => Outcome::Cancelled,
-                None => Outcome::Open,
-            }
+            let config = (!self.path().as_os_str().is_empty()).then(|| AppConfig {
+                ffmpeg_path: self.path().into(),
+            });
+            confirm_buttons(ui, [("OK", config)])
         })
     }
 
@@ -149,31 +134,34 @@ pub fn modal<T>(
         ui.add_space(4.0);
         content(ui)
     });
-    let escape = || ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
     if matches!(response.inner, Outcome::Open)
-        && response.is_top_modal
-        && !response.any_popup_open
-        && escape()
+        && response.should_close()
+        && !response.backdrop_response.clicked()
     {
         return Outcome::Cancelled;
     }
     response.inner
 }
 
-/// Right-aligned confirm/cancel row; `Some(true)` when confirmed.
-pub fn confirm_buttons(ui: &mut egui::Ui, confirm: &str, enabled: bool) -> Option<bool> {
+/// Right-aligned Cancel followed by one button per `(label, value)`, each disabled while its value is `None`.
+pub fn confirm_buttons<T>(
+    ui: &mut egui::Ui,
+    buttons: impl IntoIterator<Item = (&'static str, Option<T>)>,
+) -> Outcome<T> {
     ui.separator();
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if ui.button("Cancel").clicked() {
-            return Some(false);
+            return Outcome::Cancelled;
         }
-        if ui
-            .add_enabled(enabled, egui::Button::new(confirm))
-            .clicked()
-        {
-            return Some(true);
+        for (label, value) in buttons {
+            let button = ui.add_enabled(value.is_some(), egui::Button::new(label));
+            if let Some(value) = value
+                && button.clicked()
+            {
+                return Outcome::Accepted(value);
+            }
         }
-        None
+        Outcome::Open
     })
     .inner
 }

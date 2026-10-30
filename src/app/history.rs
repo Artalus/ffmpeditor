@@ -9,7 +9,7 @@ const MAX_STEPS: usize = 500;
 pub struct History {
     committed: Project,
     undo: VecDeque<Project>,
-    redo: Vec<Project>,
+    redo: VecDeque<Project>,
 }
 
 impl History {
@@ -17,7 +17,7 @@ impl History {
         Self {
             committed: project.clone(),
             undo: VecDeque::new(),
-            redo: Vec::new(),
+            redo: VecDeque::new(),
         }
     }
 
@@ -34,26 +34,14 @@ impl History {
         self.redo.clear();
     }
 
-    pub fn undo(&mut self, current: &mut Project) -> bool {
+    pub fn undo(&mut self, current: &mut Project) {
         self.commit(current);
-        let Some(previous) = self.undo.pop_back() else {
-            return false;
-        };
-        self.redo
-            .push(std::mem::replace(&mut self.committed, previous));
-        current.clone_from(&self.committed);
-        true
+        travel(&mut self.undo, &mut self.redo, &mut self.committed, current);
     }
 
-    pub fn redo(&mut self, current: &mut Project) -> bool {
+    pub fn redo(&mut self, current: &mut Project) {
         self.commit(current);
-        let Some(next) = self.redo.pop() else {
-            return false;
-        };
-        self.undo
-            .push_back(std::mem::replace(&mut self.committed, next));
-        current.clone_from(&self.committed);
-        true
+        travel(&mut self.redo, &mut self.undo, &mut self.committed, current);
     }
 
     pub fn can_undo(&self) -> bool {
@@ -62,6 +50,19 @@ impl History {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+}
+
+/// Makes the newest `from` step current, parking the committed state on `to`.
+fn travel(
+    from: &mut VecDeque<Project>,
+    to: &mut VecDeque<Project>,
+    committed: &mut Project,
+    current: &mut Project,
+) {
+    if let Some(step) = from.pop_back() {
+        to.push_back(std::mem::replace(committed, step));
+        current.clone_from(committed);
     }
 }
 
@@ -91,17 +92,20 @@ mod tests {
         current = project(3);
         history.commit(&current);
 
-        assert!(history.undo(&mut current));
+        history.undo(&mut current);
         assert_eq!(current, project(2));
-        assert!(history.undo(&mut current));
+        history.undo(&mut current);
         assert_eq!(current, project(1));
-        assert!(!history.undo(&mut current));
+        assert!(!history.can_undo());
+        history.undo(&mut current);
         assert_eq!(current, project(1));
 
-        assert!(history.redo(&mut current));
-        assert!(history.redo(&mut current));
+        history.redo(&mut current);
+        history.redo(&mut current);
         assert_eq!(current, project(3));
-        assert!(!history.redo(&mut current));
+        assert!(!history.can_redo());
+        history.redo(&mut current);
+        assert_eq!(current, project(3));
     }
 
     #[test]
@@ -123,9 +127,9 @@ mod tests {
         let mut current = project(1);
         let mut history = History::new(&current);
         current = project(2);
-        assert!(history.undo(&mut current));
+        history.undo(&mut current);
         assert_eq!(current, project(1));
-        assert!(history.redo(&mut current));
+        history.redo(&mut current);
         assert_eq!(current, project(2));
     }
 
@@ -137,7 +141,9 @@ mod tests {
             current = project(width);
             history.commit(&current);
         }
-        while history.undo(&mut current) {}
+        while history.can_undo() {
+            history.undo(&mut current);
+        }
         assert_eq!(current, project(10));
     }
 }

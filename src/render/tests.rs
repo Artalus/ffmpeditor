@@ -1,23 +1,17 @@
 //! Argument checks plus end-to-end runs against the real ffmpeg on PATH.
 
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::path::Path;
 
+use super::graph::{self, Graph, Target};
+use super::preview::preview_args;
 use super::*;
-use crate::ffmpeg::Ffmpeg;
-use crate::media::VideoInfo;
-use crate::model::{ClipId, Project, Span, Track};
+use crate::media::{MediaInfo, MediaInfos};
+use crate::model::{Clip, ClipId, Project, Span, Track};
+use crate::test_support::{ffmpeg, fixtures, media_info, output_path, run_ok, wait_until};
 
-struct Timeline {
-    project: Project,
-    infos: MediaInfos,
-}
-
-struct Fixtures {
-    testsrc: PathBuf,
-    red_16x9: PathBuf,
-    blue_4x3: PathBuf,
+pub struct Timeline {
+    pub project: Project,
+    pub infos: MediaInfos,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,13 +28,19 @@ fn export_args_encode_with_project_settings() {
     tl.project.settings.video_codec = "libx265".into();
     tl.project.settings.video_bitrate_kbps = 8000;
     tl.project.settings.audio_bitrate_kbps = 128;
-    let args = export_args(
-        &tl.project,
-        &tl.infos,
-        Span::new(0.0, 1.0),
-        Path::new("out.mp4"),
-    );
-    let tail = args.iter().skip_while(|a| *a != "-map").map(String::as_str);
+    let args = |output: &str| {
+        export_args(
+            &tl.project,
+            &tl.infos,
+            Span::new(0.0, 1.0),
+            Path::new(output),
+        )
+    };
+    let args_mp4 = args("out.mp4");
+    let tail = args_mp4
+        .iter()
+        .skip_while(|a| *a != "-map")
+        .map(String::as_str);
     assert_eq!(
         tail.collect::<Vec<_>>(),
         [
@@ -69,19 +69,6 @@ fn export_args_encode_with_project_settings() {
             "out.mp4",
         ]
     );
-}
-
-#[test]
-fn faststart_only_for_quicktime_containers() {
-    let tl = Timeline::new(1280, 720, 60.0);
-    let args = |output: &str| {
-        export_args(
-            &tl.project,
-            &tl.infos,
-            Span::new(0.0, 1.0),
-            Path::new(output),
-        )
-    };
     assert!(args("a.MOV").contains(&"+faststart".to_owned()));
     assert!(!args("a.mkv").contains(&"+faststart".to_owned()));
 }
@@ -119,13 +106,14 @@ fn preview_inputs_read_past_the_frame() {
 fn export_renders_overlapping_clips_in_subrange() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
-    tl.source_clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
-    let second = tl.source_clip(&fx.testsrc, Track::Video(0), 2.0, 3.0);
+    tl.clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
+    let second = tl.clip(&fx.testsrc, Track::Video(0), 2.0, 3.0);
     tl.edit(second).audio.mute_regions = vec![Span::new(0.5, 1.0)];
     let output = output_path("overlapping.mp4");
-    let args = export_args(&tl.project, &tl.infos, Span::new(1.0, 4.5), &output);
-    let status = wait(&ExportJob::start(&ffmpeg(), args, 3.5).unwrap());
-    assert_eq!(status, ExportStatus::Finished);
+    assert_eq!(
+        export(&tl, Span::new(1.0, 4.5), &output),
+        ExportStatus::Finished
+    );
     let streams = probe_streams(&output);
     assert_eq!(streams.len(), 2, "{streams:?}");
     for stream in &streams {
@@ -141,9 +129,8 @@ fn export_renders_overlapping_clips_in_subrange() {
 fn export_of_empty_timeline_succeeds() {
     let tl = Timeline::new(320, 180, 30.0);
     let output = output_path("empty.mkv");
-    let args = export_args(&tl.project, &tl.infos, Span::new(0.0, 0.5), &output);
     assert_eq!(
-        wait(&ExportJob::start(&ffmpeg(), args, 0.5).unwrap()),
+        export(&tl, Span::new(0.0, 0.5), &output),
         ExportStatus::Finished
     );
     let streams = probe_streams(&output);
@@ -156,12 +143,11 @@ fn export_places_and_mutes_audio() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
     tl.project.settings.audio_codec = "pcm_s16le".into();
-    let clip = tl.source_clip(&fx.red_16x9, Track::Video(0), 1.0, 2.0);
+    let clip = tl.clip(&fx.red_16x9, Track::Video(0), 1.0, 2.0);
     tl.edit(clip).audio.mute_regions = vec![Span::new(0.5, 1.0)];
     let output = output_path("audio.mkv");
-    let args = export_args(&tl.project, &tl.infos, Span::new(0.0, 3.0), &output);
     assert_eq!(
-        wait(&ExportJob::start(&ffmpeg(), args, 3.0).unwrap()),
+        export(&tl, Span::new(0.0, 3.0), &output),
         ExportStatus::Finished
     );
     let samples = audio_samples(&output);
@@ -182,8 +168,7 @@ fn export_failure_reports_ffmpeg_error() {
     let mut tl = Timeline::new(320, 180, 30.0);
     tl.clip("definitely-missing.mp4", Track::Video(0), 0.0, 1.0);
     let output = output_path("missing.mp4");
-    let args = export_args(&tl.project, &tl.infos, Span::new(0.0, 1.0), &output);
-    let status = wait(&ExportJob::start(&ffmpeg(), args, 1.0).unwrap());
+    let status = export(&tl, Span::new(0.0, 1.0), &output);
     let ExportStatus::Failed(message) = status else {
         panic!("{status:?}");
     };
@@ -209,38 +194,30 @@ fn export_can_be_cancelled() {
     .into_iter()
     .chain([output.to_string_lossy().into_owned()])
     .collect();
-    let mut job = ExportJob::start(&ffmpeg(), args, 600.0).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while job.status() == (ExportStatus::Running { progress: 0.0 }) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let mut job = ExportJob::start(&ffmpeg(), args, 600.0, &output).unwrap();
+    wait_until(10, || {
+        job.status() != (ExportStatus::Running { progress: 0.0 })
+    });
     assert!(
         matches!(job.status(), ExportStatus::Running { progress } if progress > 0.0 && progress < 1.0)
     );
     job.cancel();
     assert_eq!(job.status(), ExportStatus::Cancelled);
-    drop(job);
-    // A launcher shim (scoop) in between kills the real ffmpeg only after it exits itself,
-    // so the output may stay locked for a moment.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while let Err(e) = std::fs::remove_file(&output) {
-        assert!(Instant::now() < deadline, "ffmpeg still holds output: {e}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_until(5, || !output.exists());
 }
 
 #[test]
 fn preview_composites_tracks_and_cuts() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
-    tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.01);
+    tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 1.01);
     // First source frame after the seek lands mid-slot; the slot must still show it, not black.
-    let blue = tl.source_clip(&fx.blue_4x3, Track::Video(0), 1.01, 1.0);
+    let blue = tl.clip(&fx.blue_4x3, Track::Video(0), 1.01, 1.0);
     tl.edit(blue).source_in = 0.02;
-    tl.source_clip(&fx.blue_4x3, Track::Video(1), 3.0, 1.0);
-    tl.source_clip(&fx.red_16x9, Track::Video(0), 2.5, 2.0);
+    tl.clip(&fx.blue_4x3, Track::Video(1), 3.0, 1.0);
+    tl.clip(&fx.red_16x9, Track::Video(0), 2.5, 2.0);
     let pixel = |time: f64, x: u32| {
-        let image = render_preview(&tl, time);
+        let image = render_preview(&tl, time, process::MAX_INLINE_COMMAND_LINE);
         assert_eq!(image.dimensions(), (320, 180));
         classify(image.get_pixel(x, 90).0)
     };
@@ -258,16 +235,8 @@ fn preview_composites_tracks_and_cuts() {
 fn preview_works_with_graph_in_file() {
     let fx = fixtures();
     let mut tl = Timeline::new(320, 180, 30.0);
-    tl.source_clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
-    let args = preview_args(&tl.project, &tl.infos, 0.5);
-    let (mut cmd, _file) = process::command_with_limit(&ffmpeg(), &args, 0).unwrap();
-    let output = cmd.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let image = image::load_from_memory(&output.stdout).unwrap().into_rgb8();
+    tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 1.0);
+    let image = render_preview(&tl, 0.5, 0);
     assert_eq!(classify(image.get_pixel(160, 90).0), Color::Red);
 }
 
@@ -275,21 +244,17 @@ fn preview_works_with_graph_in_file() {
 fn previewer_delivers_texture_and_skips_repeated_requests() {
     let fx = fixtures();
     let mut tl = Timeline::new(1280, 720, 30.0);
-    tl.source_clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
+    tl.clip(&fx.testsrc, Track::Video(0), 0.0, 3.0);
     let ffmpeg = ffmpeg();
     let mut previewer = Previewer::new(egui::Context::default());
     previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while previewer.texture().is_none() && previewer.error().is_none() && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(10));
+    wait_until(10, || {
         previewer.poll();
-    }
+        previewer.texture().is_some() || previewer.error().is_some()
+    });
     assert_eq!(previewer.error(), None);
     assert_eq!(previewer.texture().unwrap().size(), [960, 540]);
-    while previewer.is_busy() {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until(10, || !previewer.is_busy());
     previewer.request(&ffmpeg, &tl.project, &tl.infos, 1.0);
     assert!(!previewer.is_busy());
 }
@@ -300,11 +265,10 @@ fn previewer_reports_errors() {
     tl.clip("definitely-missing.mp4", Track::Video(0), 0.0, 1.0);
     let mut previewer = Previewer::new(egui::Context::default());
     previewer.request(&ffmpeg(), &tl.project, &tl.infos, 0.5);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while previewer.error().is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
+    wait_until(10, || {
         previewer.poll();
-    }
+        previewer.error().is_some()
+    });
     assert!(
         previewer
             .error()
@@ -315,7 +279,7 @@ fn previewer_reports_errors() {
 }
 
 impl Timeline {
-    fn new(width: u32, height: u32, fps: f64) -> Self {
+    pub fn new(width: u32, height: u32, fps: f64) -> Self {
         let mut project = Project::default();
         project.settings.width = width;
         project.settings.height = height;
@@ -326,116 +290,59 @@ impl Timeline {
         }
     }
 
-    fn clip(&mut self, path: &str, track: Track, start: f64, duration: f64) -> ClipId {
-        self.source_clip(Path::new(path), track, start, duration)
+    /// Source with video and audio.
+    pub fn clip(
+        &mut self,
+        path: impl AsRef<Path>,
+        track: Track,
+        start: f64,
+        duration: f64,
+    ) -> ClipId {
+        self.clip_with(path, media_info(true, true), track, start, duration)
     }
 
-    /// Media info matches the fixtures: 3 s, 30 fps, 320x240, with audio.
-    fn source_clip(&mut self, path: &Path, track: Track, start: f64, duration: f64) -> ClipId {
-        let source = self.project.add_source(path.to_path_buf());
-        let info = MediaInfo {
-            duration: 3.0,
-            video: Some(VideoInfo {
-                width: 320,
-                height: 240,
-                fps: 30.0,
-            }),
-            has_audio: true,
-        };
+    pub fn clip_with(
+        &mut self,
+        path: impl AsRef<Path>,
+        info: MediaInfo,
+        track: Track,
+        start: f64,
+        duration: f64,
+    ) -> ClipId {
+        let source = self.project.add_source(path.as_ref().to_path_buf());
         self.infos.insert(source, info);
         let id = self.project.append_clip(source, track, duration);
         self.project.move_clip(id, start, track);
         id
     }
 
-    fn edit(&mut self, id: ClipId) -> &mut crate::model::Clip {
+    pub fn edit(&mut self, id: ClipId) -> &mut Clip {
         self.project.clip_mut(id).unwrap()
     }
-}
 
-fn ffmpeg() -> Ffmpeg {
-    Ffmpeg::new(Path::new("ffmpeg"))
-}
-
-/// Generated once per test run; stored under target/ so concurrent runs elsewhere don't collide.
-fn fixtures() -> &'static Fixtures {
-    static FIXTURES: OnceLock<Fixtures> = OnceLock::new();
-    FIXTURES.get_or_init(|| Fixtures {
-        testsrc: fixture(
-            "testsrc.mp4",
-            "testsrc2=size=320x240:rate=30:duration=3",
-            "sine=frequency=440:duration=3",
-        ),
-        red_16x9: fixture(
-            "red-16x9.mp4",
-            "color=c=red:size=320x180:rate=30:duration=3",
-            "sine=frequency=440:duration=3",
-        ),
-        blue_4x3: fixture(
-            "blue-4x3.mp4",
-            "color=c=blue:size=320x240:rate=30:duration=3",
-            "sine=frequency=880:duration=3",
-        ),
-    })
-}
-
-fn fixture(name: &str, video: &str, audio: &str) -> PathBuf {
-    let path = fixtures_dir().join(name);
-    if path.exists() {
-        return path;
+    /// Graph of `start..end` at the project size, with audio.
+    pub fn build(&self, start: f64, end: f64) -> Graph {
+        let settings = &self.project.settings;
+        graph::build(
+            &self.project,
+            &self.infos,
+            &Target {
+                range: Span { start, end },
+                width: settings.width,
+                height: settings.height,
+                audio: true,
+                input_lookahead: 0.0,
+            },
+        )
     }
-    let partial = fixtures_dir().join(format!("{}.{name}", std::process::id()));
-    let output = ffmpeg()
-        .ffmpeg()
-        .args([
-            "-loglevel",
-            "error",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            video,
-            "-f",
-            "lavfi",
-            "-i",
-            audio,
-        ])
-        .args(["-c:v", "libx264", "-c:a", "aac", "-shortest", "-f", "mp4"])
-        .arg(&partial)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    // Rename is atomic, so a concurrent run never sees a half-written fixture.
-    if std::fs::rename(&partial, &path).is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    path
 }
 
-fn fixtures_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/render-tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn output_path(name: &str) -> PathBuf {
-    fixtures_dir().join(format!("out-{}-{name}", std::process::id()))
-}
-
-fn wait(job: &ExportJob) -> ExportStatus {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match job.status() {
-            ExportStatus::Running { .. } if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            status => return status,
-        }
-    }
+/// Runs the export to the end.
+fn export(tl: &Timeline, range: Span, output: &Path) -> ExportStatus {
+    let args = export_args(&tl.project, &tl.infos, range, output);
+    let job = ExportJob::start(&ffmpeg(), args, range.len(), output).unwrap();
+    wait_until(30, || !matches!(job.status(), ExportStatus::Running { .. }));
+    job.status()
 }
 
 #[derive(Debug)]
@@ -446,24 +353,19 @@ struct Stream {
 }
 
 fn probe_streams(path: &Path) -> Vec<Stream> {
-    let output = ffmpeg()
-        .ffprobe()
-        .args([
-            "-v",
-            "error",
-            "-count_frames",
-            "-of",
-            "json",
-            "-show_entries",
-        ])
-        .arg("stream=codec_type,duration,nb_read_frames")
-        .arg(path)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let output = run_ok(
+        ffmpeg()
+            .ffprobe()
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-of",
+                "json",
+                "-show_entries",
+            ])
+            .arg("stream=codec_type,duration,nb_read_frames")
+            .arg(path),
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     json["streams"]
@@ -485,33 +387,24 @@ const AUDIO_CHECK_RATE: u32 = 8000;
 
 /// Mono samples of the first audio stream at `AUDIO_CHECK_RATE`.
 fn audio_samples(path: &Path) -> Vec<i16> {
-    let output = ffmpeg()
-        .ffmpeg()
-        .args(["-loglevel", "error", "-i"])
-        .arg(path)
-        .args(["-map", "0:a:0", "-ac", "1", "-ar"])
-        .arg(AUDIO_CHECK_RATE.to_string())
-        .args(["-f", "s16le", "-"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let output = run_ok(
+        ffmpeg()
+            .ffmpeg()
+            .args(["-loglevel", "error", "-i"])
+            .arg(path)
+            .args(["-map", "0:a:0", "-ac", "1", "-ar"])
+            .arg(AUDIO_CHECK_RATE.to_string())
+            .args(["-f", "s16le", "-"]),
     );
     let (samples, _) = output.stdout.as_chunks::<2>();
     samples.iter().map(|&b| i16::from_le_bytes(b)).collect()
 }
 
-fn render_preview(tl: &Timeline, time: f64) -> image::RgbImage {
+/// `inline_limit` as in `process::command`: 0 forces the graph into a file.
+fn render_preview(tl: &Timeline, time: f64, inline_limit: usize) -> image::RgbImage {
     let args = preview_args(&tl.project, &tl.infos, time);
-    let (mut cmd, _file) = process::command(&ffmpeg(), &args).unwrap();
-    let output = cmd.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let (mut cmd, _file) = process::command(&ffmpeg(), &args, inline_limit).unwrap();
+    let output = run_ok(&mut cmd);
     image::load_from_memory(&output.stdout).unwrap().into_rgb8()
 }
 

@@ -5,16 +5,16 @@ mod paint;
 use egui::{CursorIcon, PointerButton, Pos2, Response, Sense, Ui, Vec2};
 
 use self::edit::{
-    ClipDrag, ClipX, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
+    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
 };
 use self::layout::{Areas, TimeAxis, TrackCounts, View, content_height, layout_lanes};
 use crate::media::MediaCache;
 use crate::model::{ClipId, Project, Span};
 
 pub struct TimelineState {
-    pub pixels_per_second: f32,
+    pixels_per_second: f32,
     /// Timeline time at the left edge of the view, seconds.
-    pub scroll: f64,
+    scroll: f64,
     pub playhead: f64,
     /// Export / preview range picked on the ruler.
     pub selection: Option<Span>,
@@ -111,8 +111,6 @@ fn axis(state: &TimelineState, areas: &Areas) -> TimeAxis {
     }
 }
 
-/// Wheel scrolls time, Ctrl+wheel zooms around the pointer;
-/// Alt+wheel or wheel over the track names scrolls the rows vertically.
 fn navigate(
     ui: &Ui,
     state: &mut TimelineState,
@@ -153,8 +151,6 @@ fn navigate(
     }
 }
 
-/// Click sets the playhead and clears the range; drag selects a range.
-/// Near a range edge, click keeps the range and drag moves that edge.
 fn edit_range(
     ui: &Ui,
     response: &Response,
@@ -191,8 +187,6 @@ fn edit_range(
     }
 }
 
-/// Click selects a clip (or deselects on empty space) and sets the playhead;
-/// drag moves a clip or trims it by an edge.
 fn edit_clips(
     ui: &Ui,
     response: &Response,
@@ -242,11 +236,7 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
     let clips: Vec<_> = view
         .visible_clips(project, lane.track)
         .into_iter()
-        .map(|c| ClipX {
-            id: c.id,
-            x0: view.axis.x(c.start),
-            x1: view.axis.x(c.end()),
-        })
+        .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
     hit_clip(&clips, pos.x)
 }
@@ -269,8 +259,6 @@ fn set_cursor(
     }
 }
 
-/// Text cursor on the ruler and empty lane space;
-/// resize near range and clip edges, default over clip bodies.
 fn hover_cursor(
     ruler: &Response,
     rows: &Response,

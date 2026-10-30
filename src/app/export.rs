@@ -6,8 +6,9 @@ use egui::Context;
 
 use super::{App, Dialog};
 use crate::ffmpeg::Ffmpeg;
+use crate::media::MediaInfos;
 use crate::model::Project;
-use crate::render::{ExportJob, ExportStatus, MediaInfos, export_args};
+use crate::render::{ExportJob, ExportStatus, export_args};
 use crate::ui::export::{ExportDialog, ExportRequest, ProgressAction, default_output, progress};
 
 pub struct RunningExport {
@@ -35,7 +36,6 @@ impl App {
         self.dialog = Dialog::Export(ExportDialog::new(&output, self.timeline.selection));
     }
 
-    /// Progress window of the running export, kept open with the result once it ends.
     pub(super) fn export_progress(&mut self, ctx: &Context) {
         let Some(export) = &mut self.export else {
             return;
@@ -79,7 +79,7 @@ pub fn start_export(
     request: ExportRequest,
 ) -> anyhow::Result<RunningExport> {
     let args = export_args(project, infos, request.range, &request.output);
-    let job = ExportJob::start(ffmpeg, args, request.range.len())?;
+    let job = ExportJob::start(ffmpeg, args, request.range.len(), &request.output)?;
     Ok(RunningExport {
         job,
         output: request.output,

@@ -1,16 +1,12 @@
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::{Context, bail};
-
-use super::{MediaInfo, Waveform, probe, thumbnails, waveform};
-use crate::ffmpeg::Ffmpeg;
+use super::{MediaInfo, MediaInfos, Waveform, probe, thumbnails, waveform};
+use crate::ffmpeg::{Ffmpeg, Slot};
 use crate::model::SourceId;
 
 /// Importing many files at once must not start an ffmpeg per file.
@@ -20,7 +16,7 @@ const WORKERS: usize = 2;
 pub struct MediaCache {
     ctx: egui::Context,
     ffmpeg: Ffmpeg,
-    infos: HashMap<SourceId, MediaInfo>,
+    infos: MediaInfos,
     sources: HashMap<SourceId, SourceState>,
     /// Each `add` takes a fresh ticket; results carrying an older one for the same source are stale.
     next_ticket: u64,
@@ -45,13 +41,11 @@ struct Thumbnails {
     finished: bool,
 }
 
-/// Shared between the cache and its worker threads.
 struct Workers {
     ctx: egui::Context,
     /// Jobs with lower tickets were cleared: workers skip them and their processes get killed.
     first_live_ticket: AtomicU64,
-    /// The ffmpeg each worker is running, reachable from the UI thread to kill it.
-    running: [Mutex<Option<Child>>; WORKERS],
+    running: [Slot; WORKERS],
 }
 
 struct Job {
@@ -110,7 +104,6 @@ impl MediaCache {
         self.ffmpeg = ffmpeg;
     }
 
-    /// Probes synchronously, then starts thumbnail and waveform extraction in the background.
     pub fn add(&mut self, id: SourceId, path: &Path) -> anyhow::Result<MediaInfo> {
         if let Some(info) = self.loaded(id, path) {
             return Ok(info.clone());
@@ -153,7 +146,7 @@ impl MediaCache {
         self.infos.get(&id)
     }
 
-    pub fn infos(&self) -> &HashMap<SourceId, MediaInfo> {
+    pub fn infos(&self) -> &MediaInfos {
         &self.infos
     }
 
@@ -167,14 +160,9 @@ impl MediaCache {
         self.sources.get(&id)?.thumbnails.get(source_time)
     }
 
-    /// Grows while extraction runs, see `is_loading`.
+    /// Grows while extraction runs.
     pub fn waveform(&self, id: SourceId) -> Option<&Waveform> {
         self.sources.get(&id)?.waveform.as_ref()
-    }
-
-    /// Thumbnails or waveform of the source are still being extracted.
-    pub fn is_loading(&self, id: SourceId) -> bool {
-        self.sources.get(&id).is_some_and(|s| s.running_jobs > 0)
     }
 
     /// Importing a file that is already loaded keeps its results; a failed one is retried.
@@ -296,10 +284,11 @@ impl Workers {
                     self.ctx.request_repaint();
                 }
             };
+            let live = || self.is_live(job.ticket);
             let result = match job.kind {
                 JobKind::Thumbnails(layout) => {
                     let cmd = thumbnails::command(&job.ffmpeg, &job.path, &layout);
-                    self.run_ffmpeg(slot, job.ticket, cmd, |rgba| {
+                    self.running[slot].run(live, cmd, |rgba| {
                         thumbnails::read_frames(rgba, &layout, |frame| {
                             send(Payload::Thumbnail(frame))
                         })
@@ -307,49 +296,12 @@ impl Workers {
                 }
                 JobKind::Waveform => {
                     let cmd = waveform::command(&job.ffmpeg, &job.path);
-                    self.run_ffmpeg(slot, job.ticket, cmd, |pcm| {
+                    self.running[slot].run(live, cmd, |pcm| {
                         waveform::read_peaks(pcm, |peaks| send(Payload::Peaks(peaks)))
                     })
                 }
             };
             send(Payload::Finished(job.kind, result));
-        }
-    }
-
-    /// Runs `cmd` in the worker's slot so `cancel_before` can kill it, feeding its stdout to `read`.
-    fn run_ffmpeg(
-        &self,
-        slot: usize,
-        ticket: u64,
-        mut cmd: Command,
-        read: impl FnOnce(ChildStdout) -> io::Result<()>,
-    ) -> anyhow::Result<()> {
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let (stdout, stderr) = {
-            let mut running = lock(&self.running[slot]);
-            // Checked under the slot lock: a concurrent `cancel_before` either kills this child
-            // or has already marked the ticket stale.
-            if !self.is_live(ticket) {
-                bail!("cancelled");
-            }
-            let program = Path::new(cmd.get_program()).display().to_string();
-            let mut child = cmd.spawn().with_context(|| format!("running {program}"))?;
-            let stdout = child.stdout.take().expect("stdout is piped");
-            let stderr = child.stderr.take().expect("stderr is piped");
-            *running = Some(child);
-            (stdout, stderr)
-        };
-        // Drained concurrently, or a chatty ffmpeg blocks on a full stderr pipe.
-        let stderr = thread::spawn(move || last_line(stderr));
-        let read = read(stdout);
-        let child = lock(&self.running[slot]).take();
-        let status = child.map(|mut child| child.wait()).transpose()?;
-        let stderr = stderr.join().unwrap_or_default();
-        read.context("reading ffmpeg output")?;
-        match status {
-            Some(status) if status.success() => Ok(()),
-            Some(status) if stderr.is_empty() => bail!("ffmpeg failed: {status}"),
-            _ => bail!("ffmpeg failed: {stderr}"),
         }
     }
 
@@ -359,59 +311,43 @@ impl Workers {
 
     fn cancel_before(&self, ticket: u64) {
         self.first_live_ticket.fetch_max(ticket, Ordering::SeqCst);
-        for slot in &self.running {
-            if let Some(child) = lock(slot).as_mut() {
-                // Errors only if it already exited; the worker reaps it either way.
-                let _ = child.kill();
-            }
-        }
+        self.running.iter().for_each(Slot::kill);
     }
 }
 
 /// Separate function so the queue lock is released before the job runs.
 fn next_job(jobs: &Mutex<Receiver<Job>>) -> Option<Job> {
-    lock(jobs).recv().ok()
-}
-
-fn last_line(stderr: impl Read) -> String {
-    BufReader::new(stderr)
-        .split(b'\n')
-        .map_while(Result::ok)
-        .map(|line| String::from_utf8_lossy(&line).trim().to_owned())
-        .filter(|line| !line.is_empty())
-        .last()
-        .unwrap_or_default()
-}
-
-/// A worker panicking mid-job must not take the UI thread down with it.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    jobs.lock().unwrap().recv().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::test_media::{self, TestMedia, wait_until};
+    use crate::test_support::{self, fixtures, wait_until};
 
     fn cache() -> MediaCache {
-        MediaCache::new(egui::Context::default(), test_media::ffmpeg())
+        MediaCache::new(egui::Context::default(), test_support::ffmpeg())
+    }
+
+    fn is_loading(cache: &MediaCache, id: SourceId) -> bool {
+        cache.sources.get(&id).is_some_and(|s| s.running_jobs > 0)
     }
 
     fn wait_for_extraction(cache: &mut MediaCache, ids: &[SourceId]) {
-        wait_until(|| {
+        wait_until(30, || {
             cache.poll();
-            ids.iter().all(|&id| !cache.is_loading(id))
+            ids.iter().all(|&id| !is_loading(cache, id))
         });
     }
 
     #[test]
     fn extracts_thumbnails_and_waveforms_in_background() {
-        let media = TestMedia::new("cache");
+        let fx = fixtures();
         let mut cache = cache();
         let (both, video, audio) = (SourceId(1), SourceId(2), SourceId(3));
-        cache.add(both, &media.video_with_audio()).unwrap();
-        cache.add(video, &media.video_only()).unwrap();
-        cache.add(audio, &media.audio_only()).unwrap();
+        cache.add(both, &fx.testsrc).unwrap();
+        cache.add(video, &fx.video_only).unwrap();
+        cache.add(audio, &fx.audio_only).unwrap();
         wait_for_extraction(&mut cache, &[both, video, audio]);
 
         for id in [both, video, audio] {
@@ -429,63 +365,35 @@ mod tests {
         assert!(cache.waveform(video).is_none());
 
         let peaks = cache.waveform(both).unwrap().peaks.len();
-        cache.add(both, &media.video_with_audio()).unwrap();
-        assert!(!cache.is_loading(both));
+        cache.add(both, &fx.testsrc).unwrap();
+        assert!(!is_loading(&cache, both));
         assert_eq!(cache.waveform(both).unwrap().peaks.len(), peaks);
     }
 
     #[test]
     fn probe_failure_is_reported() {
-        let media = TestMedia::new("cache-missing");
         let mut cache = cache();
         let id = SourceId(1);
-        assert!(cache.add(id, &media.missing()).is_err());
+        assert!(cache.add(id, Path::new("missing.mp4")).is_err());
         assert!(cache.error(id).unwrap().contains("not found"));
         assert!(cache.info(id).is_none());
-        assert!(!cache.is_loading(id));
+        assert!(!is_loading(&cache, id));
     }
 
     #[test]
     fn clear_discards_results_of_running_jobs() {
-        let media = TestMedia::new("cache-clear");
+        let fx = fixtures();
         let mut cache = cache();
         let id = SourceId(1);
-        cache.add(id, &media.video_with_audio()).unwrap();
+        cache.add(id, &fx.testsrc).unwrap();
         cache.clear();
         assert!(cache.infos().is_empty());
 
-        cache.add(id, &media.audio_only()).unwrap();
+        cache.add(id, &fx.audio_only).unwrap();
         wait_for_extraction(&mut cache, &[id]);
         assert_eq!(cache.error(id), None);
         assert!(cache.thumbnail(id, 0.0).is_none());
         let peaks = cache.waveform(id).unwrap().peaks.len();
         assert!(peaks <= 210, "stale peaks leaked in: {peaks}");
-    }
-
-    #[test]
-    fn cancel_kills_running_ffmpeg() {
-        let workers = Arc::new(Workers::new(egui::Context::default()));
-        let endless = || {
-            let mut cmd = test_media::ffmpeg().ffmpeg();
-            cmd.args([
-                "-v", "error", "-f", "lavfi", "-i", "sine", "-f", "s16le", "-",
-            ]);
-            cmd
-        };
-        let running = {
-            let workers = workers.clone();
-            thread::spawn(move || {
-                workers.run_ffmpeg(0, 0, endless(), |mut pcm| {
-                    io::copy(&mut pcm, &mut io::sink()).map(drop)
-                })
-            })
-        };
-        wait_until(|| lock(&workers.running[0]).is_some());
-        workers.cancel_before(1);
-        assert!(running.join().unwrap().is_err());
-        assert!(lock(&workers.running[0]).is_none());
-
-        assert!(workers.run_ffmpeg(1, 0, endless(), |_| Ok(())).is_err());
-        assert!(lock(&workers.running[1]).is_none());
     }
 }

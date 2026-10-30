@@ -5,13 +5,15 @@ use std::time::Duration;
 use egui::{Align2, CollapsingHeader, Context, ProgressBar, ScrollArea, TextEdit};
 
 use crate::ffmpeg::Ffmpeg;
+use crate::media::MediaInfos;
 use crate::model::{Project, Span};
-use crate::render::{ExportStatus, MediaInfos, export_args};
+use crate::render::{ExportStatus, export_args};
 use crate::ui::dialogs::{Outcome, confirm_buttons, modal};
-use crate::ui::status_bar::format_time;
+use crate::ui::status_bar::timecode;
+use crate::ui::{file_name, format_time, with_default_ext};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Range {
+enum Range {
     Timeline,
     Selection,
 }
@@ -60,15 +62,12 @@ impl ExportDialog {
         selection: Option<Span>,
     ) -> Outcome<ExportRequest> {
         modal(ctx, "Export", |ui| {
-            if selection.is_none() {
-                self.range = Range::Timeline;
-            }
             ui.horizontal(|ui| {
                 ui.label("Range");
-                let whole = format!("Whole timeline ({})", format_time(project.duration()));
+                let whole = format!("Whole timeline ({})", timecode(project.duration()));
                 ui.radio_value(&mut self.range, Range::Timeline, whole);
                 let selected = match selection {
-                    Some(span) => format!("Selection ({})", format_time(span.len())),
+                    Some(span) => format!("Selection ({})", timecode(span.len())),
                     None => "Selection".to_owned(),
                 };
                 ui.add_enabled_ui(selection.is_some(), |ui| {
@@ -91,13 +90,7 @@ impl ExportDialog {
                 Ok(request) => {
                     let mut cmd = ffmpeg.ffmpeg();
                     cmd.args(export_args(project, infos, request.range, &request.output));
-                    ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                        ui.add(
-                            TextEdit::multiline(&mut command_line(&cmd).as_str())
-                                .code_editor()
-                                .desired_width(560.0),
-                        );
-                    });
+                    code_block(ui, &command_line(&cmd), 200.0);
                 }
                 Err(reason) => {
                     ui.weak(*reason);
@@ -109,14 +102,7 @@ impl ExportDialog {
             if let Some(error) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
-            match confirm_buttons(ui, "Start", request.is_ok()) {
-                Some(true) => match request {
-                    Ok(request) => Outcome::Accepted(request),
-                    Err(_) => Outcome::Open,
-                },
-                Some(false) => Outcome::Cancelled,
-                None => Outcome::Open,
-            }
+            confirm_buttons(ui, [("Start", request.ok())])
         })
     }
 
@@ -137,7 +123,6 @@ impl ExportDialog {
     }
 }
 
-/// Progress of a running export, then its result until closed.
 pub fn progress(
     ctx: &Context,
     status: &ExportStatus,
@@ -177,13 +162,7 @@ pub fn progress(
                 }
                 ExportStatus::Failed(stderr) => {
                     ui.colored_label(ui.visuals().error_fg_color, "Export failed:");
-                    ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                        ui.add(
-                            TextEdit::multiline(&mut stderr.as_str())
-                                .code_editor()
-                                .desired_width(560.0),
-                        );
-                    });
+                    code_block(ui, stderr, 240.0);
                     close_button(ui)
                 }
             };
@@ -215,18 +194,15 @@ fn pick_output(current: &Path, format: &str) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title("Export to")
         .add_filter(format, &[format]);
-    if let Some(name) = current.file_name() {
-        dialog = dialog.set_file_name(name.to_string_lossy());
+    if let Some(name) = file_name(current) {
+        dialog = dialog.set_file_name(name);
     }
     if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
         dialog = dialog.set_directory(dir);
     }
-    let mut path = dialog.save_file()?;
-    // Not every platform's dialog appends the filter's extension to a bare name.
-    if path.extension().is_none() {
-        path.set_extension(format);
-    }
-    Some(path)
+    dialog
+        .save_file()
+        .map(|path| with_default_ext(path, format))
 }
 
 fn resolve_range(
@@ -267,13 +243,19 @@ fn running_text(elapsed: Duration, progress: f32) -> String {
 
 /// `m:ss`, or `h:mm:ss` from an hour on.
 fn clock(duration: Duration) -> String {
-    let secs = duration.as_secs_f64().round() as u64;
-    let (hours, minutes, secs) = (secs / 3600, secs / 60 % 60, secs % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{secs:02}")
-    } else {
-        format!("{minutes}:{secs:02}")
-    }
+    format_time(duration.as_secs_f64(), 0, false)
+}
+
+fn code_block(ui: &mut egui::Ui, mut text: &str, max_height: f32) {
+    ScrollArea::vertical()
+        .max_height(max_height)
+        .show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut text)
+                    .code_editor()
+                    .desired_width(560.0),
+            );
+        });
 }
 
 fn close_button(ui: &mut egui::Ui) -> Option<ProgressAction> {
@@ -344,9 +326,6 @@ mod tests {
         assert_eq!(running_text(secs(42), 0.02), "0:42 elapsed");
         assert_eq!(running_text(secs(42), 0.3), "0:42 elapsed · ~2:20 total");
         assert_eq!(running_text(secs(0), 0.5), "0:00 elapsed · ~0:00 total");
-        assert_eq!(clock(secs(125)), "2:05");
-        assert_eq!(clock(Duration::from_millis(59_600)), "1:00");
-        assert_eq!(clock(secs(3725)), "1:02:05");
     }
 
     #[test]

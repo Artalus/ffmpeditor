@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
-pub const MIN_CLIP_DURATION: f64 = 0.04;
+const MIN_CLIP_DURATION: f64 = 0.04;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -51,9 +51,9 @@ pub struct Clip {
     pub id: ClipId,
     pub source: SourceId,
     pub track: Track,
-    /// Timeline position, seconds.
+    /// Timeline position.
     pub start: f64,
-    /// Offset into the source, seconds.
+    /// Offset into the source.
     pub source_in: f64,
     pub duration: f64,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -108,7 +108,7 @@ impl Project {
     }
 
     pub fn duration(&self) -> f64 {
-        self.clips.iter().map(Clip::end).fold(0.0, f64::max)
+        latest_end(self.clips.iter())
     }
 
     pub fn source(&self, id: SourceId) -> Option<&Source> {
@@ -127,17 +127,21 @@ impl Project {
         self.clips.iter().filter(move |c| c.track == track)
     }
 
-    pub fn track_end(&self, track: Track) -> f64 {
-        self.clips_on(track).map(Clip::end).fold(0.0, f64::max)
+    fn track_end(&self, track: Track) -> f64 {
+        latest_end(self.clips_on(track))
     }
 
     pub fn add_source(&mut self, path: PathBuf) -> SourceId {
         if let Some(existing) = self.sources.iter().find(|s| s.path == path) {
             return existing.id;
         }
-        let id = SourceId(self.sources.iter().map(|s| s.id.0 + 1).max().unwrap_or(1));
+        let id = SourceId(next_id(self.sources.iter().map(|s| s.id.0)));
         self.sources.push(Source { id, path });
         id
+    }
+
+    pub fn remove_source(&mut self, id: SourceId) {
+        self.sources.retain(|s| s.id != id);
     }
 
     pub fn append_clip(&mut self, source: SourceId, track: Track, source_duration: f64) -> ClipId {
@@ -181,54 +185,77 @@ impl Project {
         Some(new_id)
     }
 
-    /// Moves the clip's left edge to timeline time `start`, keeping its right edge in place.
+    /// Splits the preferred clip if it spans `at`, otherwise every clip under `at`;
+    /// returns the clips that were split.
+    pub fn split_at(&mut self, at: f64, prefer: Option<ClipId>) -> Vec<ClipId> {
+        let mut targets: Vec<_> = self
+            .clips
+            .iter()
+            .filter(|clip| clip.start < at && at < clip.end())
+            .map(|clip| clip.id)
+            .collect();
+        if let Some(id) = prefer.filter(|id| targets.contains(id)) {
+            targets = vec![id];
+        }
+        targets.retain(|&id| self.split_clip(id, at).is_some());
+        targets
+    }
+
     pub fn trim_clip_start(&mut self, id: ClipId, start: f64) {
         let Some(clip) = self.clip_mut(id) else {
             return;
         };
         let end = clip.end();
         let earliest = (clip.start - clip.source_in).max(0.0);
-        let start = start.clamp(earliest, end - MIN_CLIP_DURATION);
+        let start = start.min(end - MIN_CLIP_DURATION).max(earliest);
         clip.source_in += start - clip.start;
         clip.start = start;
         clip.duration = end - start;
     }
 
-    /// Moves the clip's right edge to timeline time `end`, keeping its left edge in place.
     pub fn trim_clip_end(&mut self, id: ClipId, end: f64, source_duration: f64) {
         let Some(clip) = self.clip_mut(id) else {
             return;
         };
         let latest = clip.start + (source_duration - clip.source_in);
-        let end = end.clamp(clip.start + MIN_CLIP_DURATION, latest);
+        let end = end.min(latest).max(clip.start + MIN_CLIP_DURATION);
         clip.duration = end - clip.start;
     }
 
-    /// Length of the overlap between the clip's head and an earlier clip on the same track;
-    /// overlaps are rendered as crossfades.
+    /// Overlap of the clip's head with an earlier clip on the same track.
+    /// Overlaps are rendered as crossfades.
     pub fn overlap_before(&self, id: ClipId) -> f64 {
-        let Some(clip) = self.clip(id) else {
-            return 0.0;
-        };
-        self.clips_on(clip.track)
-            .filter(|other| other.id != id && other.starts_before(clip))
-            .map(|other| (other.end().min(clip.end()) - clip.start).max(0.0))
-            .fold(0.0, f64::max)
+        self.overlap(id, true)
     }
 
-    /// Length of the overlap between the clip's tail and a later clip on the same track.
     pub fn overlap_after(&self, id: ClipId) -> f64 {
+        self.overlap(id, false)
+    }
+
+    /// Every overlap on `track`, for the timeline to mark.
+    pub fn crossfades(&self, track: Track) -> impl Iterator<Item = Span> {
+        self.clips_on(track)
+            .flat_map(move |a| self.clips_on(track).filter_map(move |b| a.overlap_with(b)))
+    }
+
+    fn overlap(&self, id: ClipId, head: bool) -> f64 {
         let Some(clip) = self.clip(id) else {
             return 0.0;
         };
         self.clips_on(clip.track)
-            .filter(|other| other.id != id && clip.starts_before(other))
-            .map(|other| (clip.end().min(other.end()) - other.start).max(0.0))
+            .filter_map(|other| {
+                if head {
+                    other.overlap_with(clip)
+                } else {
+                    clip.overlap_with(other)
+                }
+            })
+            .map(|span| span.len())
             .fold(0.0, f64::max)
     }
 
     fn next_clip_id(&self) -> ClipId {
-        ClipId(self.clips.iter().map(|c| c.id.0 + 1).max().unwrap_or(1))
+        ClipId(next_id(self.clips.iter().map(|c| c.id.0)))
     }
 }
 
@@ -284,8 +311,13 @@ impl Clip {
         t - self.source_in + self.start
     }
 
-    fn starts_before(&self, other: &Clip) -> bool {
-        (self.start, self.id) < (other.start, other.id)
+    /// Part of `self` covered by `later`, a clip on the same track that starts after it.
+    fn overlap_with(&self, later: &Clip) -> Option<Span> {
+        if (self.start, self.id) < (later.start, later.id) {
+            self.span().intersect(later.span())
+        } else {
+            None
+        }
     }
 }
 
@@ -384,6 +416,14 @@ impl TryFrom<String> for Track {
     }
 }
 
+fn latest_end<'a>(clips: impl Iterator<Item = &'a Clip>) -> f64 {
+    clips.map(Clip::end).fold(0.0, f64::max)
+}
+
+fn next_id(ids: impl Iterator<Item = u64>) -> u64 {
+    ids.max().map_or(1, |id| id + 1)
+}
+
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
@@ -391,6 +431,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::project;
 
     fn project_with_clip(duration: f64) -> (Project, ClipId) {
         let mut project = Project::default();
@@ -402,8 +443,9 @@ mod tests {
     #[test]
     fn toml_roundtrip() {
         let (mut project, clip) = project_with_clip(10.0);
-        project.clip_mut(clip).unwrap().audio.mute_regions = vec![Span::new(1.0, 2.0)];
-        project.clip_mut(clip).unwrap().video.fade_in = 0.5;
+        let c = project.clip_mut(clip).unwrap();
+        c.audio.mute_regions = vec![Span::new(1.0, 2.0)];
+        c.video.fade_in = 0.5;
         let text = toml::to_string_pretty(&project).unwrap();
         assert!(text.contains("track = \"V1\""), "{text}");
         let parsed: Project = toml::from_str(&text).unwrap();
@@ -429,12 +471,20 @@ mod tests {
     }
 
     #[test]
-    fn add_source_dedupes_by_path() {
+    fn sources_dedupe_by_path_and_can_be_removed() {
         let mut project = Project::default();
         let a = project.add_source("a.mp4".into());
         let b = project.add_source("b.mp4".into());
         assert_ne!(a, b);
         assert_eq!(project.add_source("a.mp4".into()), a);
+        project.remove_source(a);
+        assert_eq!(
+            project.sources,
+            [Source {
+                id: b,
+                path: "b.mp4".into()
+            }]
+        );
     }
 
     #[test]
@@ -451,9 +501,10 @@ mod tests {
     #[test]
     fn split_keeps_content_continuous() {
         let (mut project, left) = project_with_clip(10.0);
-        project.clip_mut(left).unwrap().source_in = 2.0;
-        project.clip_mut(left).unwrap().video.fade_in = 1.0;
-        project.clip_mut(left).unwrap().video.fade_out = 1.0;
+        let c = project.clip_mut(left).unwrap();
+        c.source_in = 2.0;
+        c.video.fade_in = 1.0;
+        c.video.fade_out = 1.0;
         let right = project.split_clip(left, 4.0).unwrap();
         let (l, r) = (project.clip(left).unwrap(), project.clip(right).unwrap());
         assert_eq!((l.start, l.duration, l.source_in), (0.0, 4.0, 2.0));
@@ -495,6 +546,22 @@ mod tests {
     }
 
     #[test]
+    fn trim_keeps_degenerate_clips_valid() {
+        let (mut project, clip) = project_with_clip(0.01);
+        project.trim_clip_start(clip, 5.0);
+        let c = project.clip(clip).unwrap();
+        assert_eq!((c.start, c.source_in, c.duration), (0.0, 0.0, 0.01));
+        project.trim_clip_end(clip, 5.0, 0.0);
+        assert_eq!(project.clip(clip).unwrap().duration, MIN_CLIP_DURATION);
+
+        // The source got shorter than the clip's `source_in`.
+        let (mut project, clip) = project_with_clip(2.0);
+        project.clip_mut(clip).unwrap().source_in = 5.0;
+        project.trim_clip_end(clip, 1.0, 3.0);
+        assert_eq!(project.clip(clip).unwrap().duration, MIN_CLIP_DURATION);
+    }
+
+    #[test]
     fn overlaps_on_same_track() {
         let (mut project, first) = project_with_clip(10.0);
         let source = project.clip(first).unwrap().source;
@@ -506,6 +573,49 @@ mod tests {
         assert_eq!(project.overlap_before(first), 0.0);
         assert_eq!(project.overlap_after(second), 0.0);
         assert_eq!(project.overlap_before(other_track), 0.0);
+    }
+
+    #[test]
+    fn crossfades_cover_each_overlap_on_the_track() {
+        let (project, _) = project([
+            (Track::Video(0), 0.0, 10.0),
+            (Track::Video(0), 8.0, 1.0),
+            (Track::Video(0), 9.5, 5.0),
+            (Track::Video(1), 0.0, 20.0),
+        ]);
+        let spans: Vec<_> = project.crossfades(Track::Video(0)).collect();
+        assert_eq!(spans, [Span::new(8.0, 9.0), Span::new(9.5, 10.0)]);
+    }
+
+    /// Splits `V1: 0..10, 10..20` and `V2: 5..15` (clips 1, 2, 3); returns the ids it cut.
+    fn split_ids(at: f64, prefer: Option<u64>) -> Vec<u64> {
+        let (mut project, _) = project([
+            (Track::Video(0), 0.0, 10.0),
+            (Track::Video(0), 10.0, 10.0),
+            (Track::Video(1), 5.0, 10.0),
+        ]);
+        let cut = project.split_at(at, prefer.map(ClipId));
+        cut.iter().map(|id| id.0).collect()
+    }
+
+    #[test]
+    fn split_at_prefers_the_selected_clip_under_the_cut() {
+        assert_eq!(split_ids(7.0, Some(3)), [3]);
+        assert_eq!(split_ids(7.0, Some(1)), [1]);
+    }
+
+    #[test]
+    fn split_at_without_usable_selection_cuts_all_clips_under_it() {
+        assert_eq!(split_ids(7.0, None), [1, 3]);
+        assert_eq!(split_ids(7.0, Some(2)), [1, 3]);
+        assert_eq!(split_ids(12.0, Some(99)), [2, 3]);
+    }
+
+    #[test]
+    fn split_at_clip_edges_cuts_nothing_there() {
+        assert_eq!(split_ids(10.0, None), [3]);
+        assert!(split_ids(0.0, None).is_empty());
+        assert!(split_ids(20.0, None).is_empty());
     }
 
     #[test]

@@ -1,29 +1,28 @@
 use egui::{Align, Layout};
 
 use crate::model::Span;
+use crate::ui::format_time;
 
-pub struct Status<'a> {
-    pub playhead: f64,
-    pub duration: f64,
-    pub selection: Option<Span>,
-    /// `ffmpeg -version` line, or why it could not be run.
-    pub ffmpeg: &'a Result<String, String>,
-    pub export_progress: Option<f32>,
-}
-
-pub fn show(ui: &mut egui::Ui, status: &Status) {
+pub fn show(
+    ui: &mut egui::Ui,
+    playhead: f64,
+    duration: f64,
+    selection: Option<Span>,
+    ffmpeg: &Result<String, String>,
+    export_progress: Option<f32>,
+) {
     ui.horizontal(|ui| {
-        ui.monospace(format_time(status.playhead));
+        ui.monospace(timecode(playhead));
         ui.weak("/");
-        ui.monospace(format_time(status.duration));
+        ui.monospace(timecode(duration));
         ui.separator();
-        ui.label(selection_text(status.selection));
-        if let Some(progress) = status.export_progress {
+        ui.label(selection_text(selection));
+        if let Some(progress) = export_progress {
             ui.separator();
             ui.label(format!("exporting {:.0}%", progress * 100.0));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            match status.ffmpeg {
+            match ffmpeg {
                 Ok(version) => ui.weak(short_version(version)),
                 Err(err) => ui.colored_label(ui.visuals().error_fg_color, format!("ffmpeg: {err}")),
             };
@@ -32,24 +31,17 @@ pub fn show(ui: &mut egui::Ui, status: &Status) {
 }
 
 /// `h:mm:ss.mmm`
-pub fn format_time(seconds: f64) -> String {
-    let ms = (seconds.max(0.0) * 1000.0).round() as u64;
-    format!(
-        "{}:{:02}:{:02}.{:03}",
-        ms / 3_600_000,
-        ms / 60_000 % 60,
-        ms / 1000 % 60,
-        ms % 1000
-    )
+pub fn timecode(seconds: f64) -> String {
+    format_time(seconds, 3, true)
 }
 
 fn selection_text(selection: Option<Span>) -> String {
     match selection {
         Some(span) => format!(
             "selection {} – {} ({})",
-            format_time(span.start),
-            format_time(span.end),
-            format_time(span.len())
+            timecode(span.start),
+            timecode(span.end),
+            timecode(span.len())
         ),
         None => "no selection".to_owned(),
     }
@@ -63,15 +55,6 @@ fn short_version(version: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn time_formatting() {
-        assert_eq!(format_time(0.0), "0:00:00.000");
-        assert_eq!(format_time(3723.4567), "1:02:03.457");
-        assert_eq!(format_time(59.9996), "0:01:00.000");
-        assert_eq!(format_time(-5.0), "0:00:00.000");
-        assert_eq!(format_time(36_000.0), "10:00:00.000");
-    }
 
     #[test]
     fn selection_shows_bounds_and_length() {
