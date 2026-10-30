@@ -22,6 +22,8 @@ pub struct TimelineState {
     pub selected_clip: Option<ClipId>,
     /// Clip under the last right-click; the context menu acts on it.
     menu_clip: Option<ClipId>,
+    /// Lane kind of that right-click: fade reset targets the video or audio part.
+    menu_video: bool,
     /// Vertical scroll of the track rows, points.
     scroll_y: f32,
     drag: Option<Drag>,
@@ -212,6 +214,7 @@ fn edit_clips(
         && let Some(pos) = response.interact_pointer_pos()
     {
         state.menu_clip = hit(view, project, pos).map(|(clip, _)| clip);
+        state.menu_video = view.lane_at(pos).is_some_and(|l| l.kind == LaneKind::Video);
         if state.menu_clip.is_some() {
             state.selected_clip = state.menu_clip;
         }
@@ -272,6 +275,8 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
             return;
         };
         let muted = clip.audio.muted;
+        let video = state.menu_video;
+        let (fade_in, fade_out) = clip.fades(video);
         let selection = state
             .selection
             .filter(|s| s.intersect(clip.span()).is_some());
@@ -296,6 +301,24 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
             project.unmute_range(id, range);
             ui.close();
         }
+        ui.menu_button("Reset fade", |ui| {
+            for (label, reset_in, reset_out) in [
+                ("Fade-in", true, false),
+                ("Fade-out", false, true),
+                ("Both", true, true),
+            ] {
+                let active = (reset_in && fade_in > 0.0) || (reset_out && fade_out > 0.0);
+                if ui.add_enabled(active, egui::Button::new(label)).clicked() {
+                    if reset_in {
+                        project.set_fade(id, video, true, 0.0);
+                    }
+                    if reset_out {
+                        project.set_fade(id, video, false, 0.0);
+                    }
+                    ui.close();
+                }
+            }
+        });
     });
 }
 
@@ -400,6 +423,7 @@ impl Default for TimelineState {
             selection: None,
             selected_clip: None,
             menu_clip: None,
+            menu_video: false,
             scroll_y: 0.0,
             drag: None,
             used_video: Vec::new(),
