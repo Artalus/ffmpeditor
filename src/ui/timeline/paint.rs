@@ -13,6 +13,7 @@ use crate::ui::format_time;
 const CLIP_ROUNDING: f32 = 3.0;
 const VIDEO_CLIP: Color32 = Color32::from_rgb(50, 80, 135);
 const AUDIO_CLIP: Color32 = Color32::from_rgb(35, 100, 80);
+const TEXT_CLIP: Color32 = Color32::from_rgb(105, 70, 130);
 const ERROR_CLIP: Color32 = Color32::from_rgb(140, 35, 35);
 const CLIP_BORDER: Color32 = Color32::from_black_alpha(160);
 const SELECTED_BORDER: Color32 = Color32::WHITE;
@@ -60,7 +61,7 @@ fn lanes(painter: &Painter, scene: &Scene) {
             continue;
         }
         painter.rect_filled(rect, 0.0, lane_fill(lane, scene.visuals));
-        let clips = scene.view.visible_clips(scene.project, lane.track);
+        let clips = scene.view.lane_clips(scene.project, lane);
         // Shades go with each body so they darken only that clip's media; lines, names,
         // borders, the crossfade marker and handles follow in later passes so no shade covers them.
         for clip in &clips {
@@ -130,6 +131,7 @@ fn clip_in_lane(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, 
     let error = clip.source().and_then(|s| scene.media.error(s));
     let selected = scene.state.selected_clip == Some(clip.id);
     let base = match (error, lane.kind) {
+        (None, _) if clip.is_text() => TEXT_CLIP,
         (Some(_), _) => ERROR_CLIP,
         (None, LaneKind::Video) => VIDEO_CLIP,
         (None, LaneKind::Audio) => AUDIO_CLIP,
@@ -328,7 +330,7 @@ fn cross_mark(painter: &Painter, x0: f32, x1: f32, lane_rect: Rect) {
 /// Pinned to the visible part of the clip so the name stays readable when the start is scrolled off.
 fn label(painter: &Painter, scene: &Scene, clip: &Clip, error: Option<&str>) {
     let name = match (clip.text(), clip.source()) {
-        (Some(text), _) => text.text.clone(),
+        (Some(text), _) => text.text.lines().next().unwrap_or_default().to_owned(),
         (None, Some(source)) => scene
             .project
             .source(source)

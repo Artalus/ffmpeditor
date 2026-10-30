@@ -202,6 +202,13 @@ impl View {
             .map(|l| l.track)
     }
 
+    /// Clips of `lane` within view; text exists only in video lanes.
+    pub fn lane_clips<'p>(&self, project: &'p Project, lane: &Lane) -> Vec<&'p Clip> {
+        let mut clips = self.visible_clips(project, lane.track);
+        clips.retain(|c| lane.kind == LaneKind::Video || !c.is_text());
+        clips
+    }
+
     /// Clips on `track` within view, in draw order (later on top).
     pub fn visible_clips<'p>(&self, project: &'p Project, track: Track) -> Vec<&'p Clip> {
         let (start, end) = (
