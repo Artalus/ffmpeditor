@@ -3,22 +3,41 @@
 egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is spawned processes.
 
 ## modules
-- `model` — project data: settings, sources, clips; pure edit ops (append, move, split, trim, overlaps). saved as TOML.
+- `model` — project data: settings, sources, clips, track counts; pure edit ops. saved as TOML.
 - `config` — app config (ffmpeg path) in OS config dir (`%APPDATA%\ffmpeditor\config\config.toml`).
 - `ffmpeg` — binary locations, `Command` builders (no console window on windows), stderr/failure helpers, `Slot` for killable processes.
 - `media` — ffprobe → `MediaInfo`; background thumbnail + waveform extraction; `MediaCache` holds results/textures.
 - `render` — project → ffmpeg filter graph. export job with progress/cancel. previewer renders still frame at playhead.
-- `ui::timeline` — timeline widget: ruler, tracks, clips, drag/trim, playhead, range selection.
-- `app` — window shell: menus, dialogs, shortcuts, undo, wiring.
+- `ui::timeline` — timeline widget. `layout` geometry, `edit` hit-testing/snapping/drag math, `paint` drawing.
+- `ui` other — viewer, status bar, dialogs, project settings, export dialog.
+- `app` — window shell: menus, shortcuts, undo, file ops, export wiring.
 - `test_support` — tests only: real-ffmpeg runner, cached media fixtures under `target/test-fixtures`, polling helper.
 
 ## model
 - time = `f64` seconds everywhere.
+- track counts (`tracks.video`, `tracks.audio`) are stored, min 1 each. load raises them to cover clips. removing a track drops its clips and renumbers higher tracks of that kind.
 - clip on video track `V<n>` brings video + its own audio (audio follows video). clip on audio track `A<n>` brings audio only.
 - higher video track draws on top.
-- clips overlapping on same track = crossfade; later clip fades in over the overlap.
-- mute regions stored in source time, stick to content when clip moves/trims.
+- clips overlapping on same track = crossfade.
+- fades stored per clip, separately for video and audio, seconds, `fade_in + fade_out <= duration`.
+- render applies effective fades: video fade-in and audio fade-in = max(stored, overlap with earlier clip); audio fade-out = max(stored, overlap with later clip); video fade-out = stored (later clip fades in over it).
+- mute: whole clip flag, plus regions in source time, kept sorted and merged; regions stick to content when clip moves/trims.
 - media info (duration, size, fps) is not saved; re-probed on open.
+
+## timeline
+- rows: per video track a video lane + its linked audio lane; then one lane per audio track.
+- hit priority inside a lane: fade handle (top 8 px band) > trim edge (6 px) > mute region edge (audio lanes) > clip body.
+- fade handle sits where its fade ends; grabbed only on the side its triangle extends to, so stacked handles stay reachable.
+- snapping 8 px: clip edges, playhead, 0. fade drags also snap to the crossfade overlap.
+- draw order per lane: clip bodies with media and own fade shade; fade lines, names, borders; crossfade X; handles.
+- trash hint: track had clips this session, is empty, is not the last of its kind.
+- edits mutate the project directly; app takes an undo snapshot when no drag is in progress.
+
+## app
+- undo = whole-project snapshots, 500 steps.
+- shortcuts ignored while a dialog is open, a text field has focus, or a timeline drag runs. plain-key shortcuts require no modifiers.
+- import: video source → V1, audio-only → A1, appended at track end.
+- unreadable config: warning at start, confirmation before it is overwritten.
 
 ## render
 - one ffmpeg input per clip, input-seeked (`-ss`/`-t`), so cost scales with rendered range, not source length.
@@ -56,6 +75,10 @@ start = 0.0
 source_in = 12.5
 duration = 30.0
 
+[clips.video]
+fade_in = 1.0
+fade_out = 0.0
+
 [clips.audio]
 muted = false
 volume = 1.0
@@ -65,4 +88,8 @@ fade_out = 0.5
 [[clips.audio.mute_regions]]
 start = 20.0
 end = 22.0
+
+[tracks]
+video = 2
+audio = 1
 ```
