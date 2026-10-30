@@ -144,8 +144,10 @@ impl eframe::App for App {
             self.dialog = Dialog::EmptyMute(empty);
             ui.ctx().request_repaint();
         }
+        let editing = self.properties_panel(ui);
+        self.timeline_busy |= editing;
         self.viewer(ui);
-        self.settle(&timeline);
+        self.settle(&timeline, editing);
         ui::dialogs::errors(ui.ctx(), &mut self.errors);
         self.update_title(ui.ctx());
     }
@@ -405,6 +407,16 @@ impl App {
             .inner
     }
 
+    /// Shown for a selected text clip; true while one of its fields is being edited.
+    fn properties_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let clip = self
+            .timeline
+            .selected_clip
+            .and_then(|id| self.project.clip_mut(id))
+            .filter(|c| c.is_text());
+        clip.is_some_and(|clip| ui::properties::show(ui, clip))
+    }
+
     fn viewer(&self, ui: &mut egui::Ui) {
         let placeholder = if self.project.clips.is_empty() {
             "Import media to start: File → Import media…"
@@ -416,8 +428,8 @@ impl App {
             .show(ui, |ui| ui::viewer::show(ui, &self.previewer, placeholder));
     }
 
-    fn settle(&mut self, timeline: &TimelineResponse) {
-        if !timeline.interacting {
+    fn settle(&mut self, timeline: &TimelineResponse, editing: bool) {
+        if !timeline.interacting && !editing {
             self.history.commit(&self.project);
         }
         if let Some(id) = self.timeline.selected_clip
