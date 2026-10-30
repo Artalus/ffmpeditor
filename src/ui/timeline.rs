@@ -407,9 +407,10 @@ fn hover_cursor(
 
 fn zone_cursor(zone: Zone) -> CursorIcon {
     match zone {
-        Zone::Start | Zone::End | Zone::Region { .. } | Zone::Fade { .. } => {
-            CursorIcon::ResizeHorizontal
-        }
+        Zone::Start | Zone::End => CursorIcon::ResizeColumn,
+        Zone::Fade { fade_in: true, .. } => CursorIcon::ResizeNorthWest,
+        Zone::Fade { fade_in: false, .. } => CursorIcon::ResizeNorthEast,
+        Zone::Region { .. } => CursorIcon::ResizeHorizontal,
         Zone::Body => CursorIcon::Grabbing,
     }
 }
