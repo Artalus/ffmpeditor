@@ -47,6 +47,13 @@ pub fn confirm_delete_track(ctx: &Context, track: Track, clips: usize) -> Outcom
     })
 }
 
+pub fn confirm_remove_empty_mute(ctx: &Context) -> Outcome<()> {
+    modal(ctx, "Empty mute segment", |ui| {
+        ui.label("Segment ends dragged too close to each other. Remove segment?");
+        confirm_buttons(ui, [("Remove", Some(()))])
+    })
+}
+
 pub fn errors(ctx: &Context, errors: &mut Vec<String>) {
     if errors.is_empty() {
         return;

@@ -36,6 +36,16 @@ pub struct TimelineResponse {
     pub playhead_moved: bool,
     /// Non-empty track the user asked to delete; the app confirms first.
     pub delete_track: Option<Track>,
+    /// Mute region the user dragged down to nothing; the app asks whether to drop it.
+    pub empty_mute: Option<EmptyMute>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct EmptyMute {
+    pub clip: ClipId,
+    pub index: usize,
+    /// The region before the drag, in source time.
+    pub original: Span,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -74,7 +84,7 @@ pub fn show(
         content_top: areas.rows.top() - state.scroll_y,
     };
     edit_range(ui, &ruler, state, project, &view);
-    edit_clips(ui, &rows, state, project, media, &view);
+    let empty_mute = edit_clips(ui, &rows, state, project, media, &view);
     clip_menu(&rows, state, project);
     if state.drag.is_some() && !ruler.dragged() && !rows.dragged() {
         state.drag = None;
@@ -95,6 +105,7 @@ pub fn show(
         interacting: state.drag.is_some(),
         playhead_moved: state.playhead != playhead_before,
         delete_track,
+        empty_mute,
     }
 }
 
@@ -189,7 +200,7 @@ fn edit_clips(
     project: &mut Project,
     media: &MediaCache,
     view: &View,
-) {
+) -> Option<EmptyMute> {
     let axis = &view.axis;
     if response.clicked()
         && let Some(pos) = response.interact_pointer_pos()
@@ -230,10 +241,28 @@ fn edit_clips(
     }
     if response.drag_stopped()
         && let Some(Drag::Clip(edit)) = state.drag
-        && matches!(edit.zone, Zone::Region { .. })
     {
-        project.merge_mute_regions(edit.clip);
+        return finish_region_drag(project, edit, axis.seconds(1.0));
     }
+    None
+}
+
+/// Merges the dragged region into its neighbours, unless it shrank below `min_len`:
+/// that one is left alone for the app to ask about.
+fn finish_region_drag(project: &mut Project, edit: ClipDrag, min_len: f64) -> Option<EmptyMute> {
+    let (Zone::Region { index, .. }, Some(original)) = (edit.zone, edit.original) else {
+        return None;
+    };
+    let region = *project.clip(edit.clip)?.audio.mute_regions.get(index)?;
+    if region.len() < min_len {
+        return Some(EmptyMute {
+            clip: edit.clip,
+            index,
+            original,
+        });
+    }
+    project.merge_mute_regions(edit.clip);
+    None
 }
 
 fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) {
