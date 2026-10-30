@@ -4,6 +4,7 @@ mod export;
 mod files;
 mod history;
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use egui::{Context, ViewportCommand};
@@ -22,6 +23,7 @@ use crate::ui::timeline::{EmptyMute, TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
 use editing::step_frames;
 use export::{RunningExport, start_export};
+use files::ImportGroup;
 use history::History;
 
 pub struct App {
@@ -43,6 +45,8 @@ pub struct App {
     export: Option<RunningExport>,
     last_export: Option<PathBuf>,
     dialog: Dialog,
+    /// Import groups waiting for their confirmation dialog.
+    placements: VecDeque<ImportGroup>,
     /// The user already agreed to drop unsaved changes, so the next close request goes through.
     quit_confirmed: bool,
     /// Config file that failed to load; saving settings would overwrite it.
@@ -61,6 +65,8 @@ enum Dialog {
     OverwriteConfig(AppConfig, PathBuf),
     /// A non-empty track the user wants gone.
     DeleteTrack(Track),
+    /// Imported clips that need another track than the one they were aimed at.
+    Place(ImportGroup),
     /// A mute region dragged down to nothing.
     EmptyMute(EmptyMute),
     ProjectSettings(ProjectSettingsDialog),
@@ -107,6 +113,7 @@ impl App {
             export: None,
             last_export: None,
             dialog: Dialog::None,
+            placements: VecDeque::new(),
             quit_confirmed: false,
             unreadable_config,
             errors,
@@ -246,7 +253,11 @@ impl App {
 
     fn dialogs(&mut self, ctx: &Context) {
         match &mut self.dialog {
-            Dialog::None => {}
+            Dialog::None => {
+                if let Some(group) = self.placements.pop_front() {
+                    self.dialog = Dialog::Place(group);
+                }
+            }
             Dialog::Unsaved(action) => {
                 let action = *action;
                 self.unsaved_changes(ctx, action);
@@ -286,6 +297,17 @@ impl App {
                         }
                     }
                 }
+            }
+            Dialog::Place(group) => {
+                let outcome =
+                    ui::dialogs::confirm_placement(ctx, group.from, group.target, group.create);
+                if matches!(outcome, Outcome::Open) {
+                    return;
+                }
+                let Dialog::Place(group) = std::mem::replace(&mut self.dialog, Dialog::None) else {
+                    return;
+                };
+                self.finish_placement(group, matches!(outcome, Outcome::Accepted(())));
             }
             Dialog::EmptyMute(empty) => {
                 let empty = *empty;

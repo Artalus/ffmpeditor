@@ -47,6 +47,17 @@ pub fn confirm_delete_track(ctx: &Context, track: Track, clips: usize) -> Outcom
     })
 }
 
+pub fn confirm_placement(ctx: &Context, from: Track, target: Track, create: bool) -> Outcome<()> {
+    modal(ctx, "Place clips", |ui| {
+        if create {
+            ui.label(format!("No free track above {from}. Create {target}?"));
+        } else {
+            ui.label(format!("Clips overlap on {from}. Place on {target}?"));
+        }
+        confirm_buttons(ui, [(if create { "Create" } else { "Place" }, Some(()))])
+    })
+}
+
 pub fn confirm_remove_empty_mute(ctx: &Context) -> Outcome<()> {
     modal(ctx, "Empty mute segment", |ui| {
         ui.label("Segment ends dragged too close to each other. Remove segment?");
