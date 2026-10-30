@@ -228,6 +228,59 @@ impl Project {
         }
     }
 
+    pub fn set_muted(&mut self, id: ClipId, muted: bool) {
+        if let Some(clip) = self.clip_mut(id) {
+            clip.audio.muted = muted;
+        }
+    }
+
+    /// `range` is in timeline time; regions are stored in source time.
+    pub fn mute_range(&mut self, id: ClipId, range: Span) {
+        self.edit_regions(id, range, |regions, r| {
+            regions.push(r);
+            regions.sort_by(|a, b| a.start.total_cmp(&b.start));
+            let mut merged: Vec<Span> = Vec::new();
+            for s in regions.drain(..) {
+                match merged.last_mut() {
+                    Some(last) if s.start <= last.end => last.end = last.end.max(s.end),
+                    _ => merged.push(s),
+                }
+            }
+            *regions = merged;
+        });
+    }
+
+    pub fn unmute_range(&mut self, id: ClipId, range: Span) {
+        self.edit_regions(id, range, |regions, r| {
+            let kept = regions.iter().flat_map(|s| {
+                [
+                    Span {
+                        start: s.start,
+                        end: s.end.min(r.start),
+                    },
+                    Span {
+                        start: s.start.max(r.end),
+                        end: s.end,
+                    },
+                ]
+            });
+            *regions = kept.filter(|s| !s.is_empty()).collect();
+        });
+    }
+
+    fn edit_regions(&mut self, id: ClipId, range: Span, edit: impl FnOnce(&mut Vec<Span>, Span)) {
+        let Some(clip) = self.clip_mut(id) else {
+            return;
+        };
+        if let Some(r) = range.intersect(clip.span()) {
+            let r = Span::new(
+                clip.timeline_to_source(r.start),
+                clip.timeline_to_source(r.end),
+            );
+            edit(&mut clip.audio.mute_regions, r);
+        }
+    }
+
     /// Splits at timeline time `at`; returns the id of the new right-hand part.
     pub fn split_clip(&mut self, id: ClipId, at: f64) -> Option<ClipId> {
         let new_id = self.next_clip_id();
@@ -503,6 +556,50 @@ mod tests {
         let source = project.add_source("a.mp4".into());
         let clip = project.append_clip(source, Track::Video(0), duration);
         (project, clip)
+    }
+
+    #[test]
+    fn mute_ranges_merge_split_and_clip() {
+        let (mut project, clip) = project_with_clip(10.0);
+        project.mute_range(clip, Span::new(1.0, 3.0));
+        project.mute_range(clip, Span::new(3.0, 4.0));
+        project.mute_range(clip, Span::new(6.0, 7.0));
+        let regions = |p: &Project| p.clip(clip).unwrap().audio.mute_regions.clone();
+        assert_eq!(
+            regions(&project),
+            [Span::new(1.0, 4.0), Span::new(6.0, 7.0)]
+        );
+        project.unmute_range(clip, Span::new(2.0, 3.0));
+        assert_eq!(
+            regions(&project),
+            [
+                Span::new(1.0, 2.0),
+                Span::new(3.0, 4.0),
+                Span::new(6.0, 7.0)
+            ]
+        );
+        project.mute_range(clip, Span::new(9.0, 20.0));
+        project.mute_range(clip, Span::new(20.0, 30.0));
+        assert_eq!(regions(&project).last(), Some(&Span::new(9.0, 10.0)));
+        assert_eq!(regions(&project).len(), 4);
+    }
+
+    #[test]
+    fn mute_region_survives_clip_move() {
+        let (mut project, clip) = project_with_clip(10.0);
+        project.mute_range(clip, Span::new(1.0, 2.0));
+        project.move_clip(clip, 5.0, Track::Video(0));
+        assert_eq!(
+            project.clip(clip).unwrap().audio.mute_regions,
+            [Span::new(1.0, 2.0)]
+        );
+        project.mute_range(clip, Span::new(5.0, 6.0));
+        assert_eq!(
+            project.clip(clip).unwrap().audio.mute_regions[0],
+            Span::new(0.0, 2.0)
+        );
+        project.set_muted(clip, true);
+        assert!(project.clip(clip).unwrap().audio.muted);
     }
 
     #[test]
