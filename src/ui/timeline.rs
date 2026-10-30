@@ -5,9 +5,10 @@ mod paint;
 use egui::{CursorIcon, PointerButton, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2};
 
 use self::edit::{
-    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
+    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_region_edge, opposite_edge,
+    range_selection,
 };
-use self::layout::{Areas, TimeAxis, TrackCounts, View, content_height, layout_lanes};
+use self::layout::{Areas, LaneKind, TimeAxis, TrackCounts, View, content_height, layout_lanes};
 use crate::media::MediaCache;
 use crate::model::{ClipId, Project, Span, Track};
 
@@ -227,6 +228,12 @@ fn edit_clips(
         };
         edit.apply(project, axis.time(pos.x), track, source_duration, snapping);
     }
+    if response.drag_stopped()
+        && let Some(Drag::Clip(edit)) = state.drag
+        && matches!(edit.zone, Zone::Region { .. })
+    {
+        project.merge_mute_regions(edit.clip);
+    }
 }
 
 fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) {
@@ -270,7 +277,24 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
         .into_iter()
         .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
-    hit_clip(&clips, pos.x)
+    let (id, zone) = hit_clip(&clips, pos.x)?;
+    // Clip trim zones win over region edges, which win over the clip body.
+    if zone == Zone::Body
+        && lane.kind == LaneKind::Audio
+        && let Some(clip) = project.clip(id)
+    {
+        let x = |t| view.axis.x(clip.source_to_timeline(t));
+        let edges: Vec<_> = clip
+            .audio
+            .mute_regions
+            .iter()
+            .map(|r| (x(r.start), x(r.end)))
+            .collect();
+        if let Some((index, start)) = hit_region_edge(&edges, pos.x) {
+            return Some((id, Zone::Region { index, start }));
+        }
+    }
+    Some((id, zone))
 }
 
 fn set_cursor(
@@ -317,7 +341,7 @@ fn hover_cursor(
 
 fn zone_cursor(zone: Zone) -> CursorIcon {
     match zone {
-        Zone::Start | Zone::End => CursorIcon::ResizeHorizontal,
+        Zone::Start | Zone::End | Zone::Region { .. } => CursorIcon::ResizeHorizontal,
         Zone::Body => CursorIcon::Grabbing,
     }
 }
