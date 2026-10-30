@@ -399,7 +399,8 @@ fn hover_cursor(
         });
     }
     match hit(view, project, rows.hover_pos()?) {
-        None => Some(CursorIcon::Text),
+        // Empty lanes only move the playhead; range selection lives on the ruler.
+        None => None,
         Some((_, Zone::Body)) => None,
         Some((_, zone)) => Some(zone_cursor(zone)),
     }
