@@ -20,6 +20,8 @@ pub struct TimelineState {
     /// Export / preview range picked on the ruler.
     pub selection: Option<Span>,
     pub selected_clip: Option<ClipId>,
+    /// Where imported clips go; may name a track that no longer exists after undo.
+    pub selected_track: Option<Track>,
     /// Clip under the last right-click; the context menu acts on it.
     menu_clip: Option<ClipId>,
     /// Lane kind of that right-click: fade reset targets the video or audio part.
@@ -209,6 +211,7 @@ fn edit_clips(
         && let Some(pos) = response.interact_pointer_pos()
     {
         state.selected_clip = hit(view, project, pos).map(|(clip, _)| clip);
+        state.selected_track = view.lane_at(pos).map(|l| l.track).or(state.selected_track);
         state.playhead = axis.time(pos.x).max(0.0);
     }
     if response.secondary_clicked()
@@ -226,6 +229,7 @@ fn edit_clips(
         && let Some(edit) = ClipDrag::begin(project, clip, zone, axis.time(origin.x))
     {
         state.selected_clip = Some(clip);
+        state.selected_track = view.lane_at(origin).map(|l| l.track);
         state.drag = Some(Drag::Clip(edit));
     }
     if response.dragged()
@@ -469,6 +473,7 @@ impl Default for TimelineState {
             playhead: 0.0,
             selection: None,
             selected_clip: None,
+            selected_track: None,
             menu_clip: None,
             menu_video: false,
             scroll_y: 0.0,
@@ -485,6 +490,15 @@ impl TimelineState {
         let used = self.used_mut(track.is_video());
         if (track.index() as usize) < used.len() {
             used.remove(track.index() as usize);
+        }
+        if let Some(selected) = self.selected_track
+            && selected.is_video() == track.is_video()
+        {
+            self.selected_track = match selected.index().cmp(&track.index()) {
+                std::cmp::Ordering::Less => Some(selected),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(selected.with_index(selected.index() - 1)),
+            };
         }
     }
 
@@ -543,7 +557,11 @@ fn track_controls(
             continue;
         }
         let id = ui.make_persistent_id(("track_header", lane.track));
-        ui.interact(rect, id, Sense::click()).context_menu(|ui| {
+        let header = ui.interact(rect, id, Sense::click());
+        if header.clicked() {
+            state.selected_track = Some(lane.track);
+        }
+        header.context_menu(|ui| {
             let last = project.tracks.count(lane.track.is_video()) <= 1;
             if ui.add_enabled(!last, egui::Button::new("Delete")).clicked() {
                 if project.clips_on(lane.track).next().is_some() {

@@ -559,6 +559,13 @@ impl Track {
     pub fn is_video(self) -> bool {
         matches!(self, Track::Video(_))
     }
+
+    pub fn with_index(self, index: u32) -> Self {
+        match self {
+            Track::Video(_) => Track::Video(index),
+            Track::Audio(_) => Track::Audio(index),
+        }
+    }
 }
 
 impl fmt::Display for Track {
