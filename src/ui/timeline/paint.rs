@@ -285,7 +285,7 @@ fn header(painter: &Painter, scene: &Scene) {
             ("audio".to_owned(), visuals.weak_text_color())
         };
         let pos = pos2(rect.left() + 8.0, rect.center().y);
-        let name = painter.text(
+        painter.text(
             pos,
             Align2::LEFT_CENTER,
             text,
@@ -293,11 +293,16 @@ fn header(painter: &Painter, scene: &Scene) {
             color,
         );
         if lane.is_primary() && scene.state.shows_trash(scene.project, lane.track) {
-            trash_icon(painter, pos2(name.right() + 9.0, rect.center().y), color);
+            trash_icon(painter, trash_rect(rect).center(), color);
         }
     }
     let separator = visuals.widgets.noninteractive.bg_stroke;
     painter.vline(area.right() - 0.5, area.y_range(), separator);
+}
+
+/// Fixed slot at the right of a header row, so the hover tooltip can find it without text layout.
+pub fn trash_rect(row: Rect) -> Rect {
+    Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(12.0, 12.0))
 }
 
 /// Drawn by hand: the default fonts have no reliable trash glyph.

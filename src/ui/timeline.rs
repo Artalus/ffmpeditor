@@ -368,6 +368,12 @@ fn track_controls(
                 ui.close();
             }
         });
+        // egui only hovers a hover-sense widget registered after the clickable one beneath it.
+        if state.shows_trash(project, lane.track) {
+            let id = ui.make_persistent_id(("track_trash", lane.track));
+            ui.interact(paint::trash_rect(rect), id, Sense::hover())
+                .on_hover_text("This track has no clips");
+        }
     }
     delete
 }
