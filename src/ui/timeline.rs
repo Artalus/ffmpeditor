@@ -32,16 +32,8 @@ pub struct TimelineResponse {
 
 #[derive(Clone, Copy, Debug)]
 enum Drag {
-    Clip {
-        edit: ClipDrag,
-        /// Rows are frozen while dragging, with a spare empty track of the clip's kind to
-        /// drop onto; otherwise it would keep reappearing under the pointer and pull the
-        /// clip ever higher.
-        tracks: TrackCounts,
-    },
-    Range {
-        anchor: f64,
-    },
+    Clip(ClipDrag),
+    Range { anchor: f64 },
 }
 
 pub fn show(
@@ -64,7 +56,7 @@ pub fn show(
         Sense::click_and_drag(),
     );
 
-    let lanes = layout_lanes(visible_tracks(state, project));
+    let lanes = layout_lanes(TrackCounts::of(project));
     navigate(ui, state, project, &areas, content_height(&lanes));
     let view = View {
         axis: axis(state, &areas),
@@ -76,8 +68,6 @@ pub fn show(
     edit_clips(ui, &rows, state, project, media, &view);
     if state.drag.is_some() && !ruler.dragged() && !rows.dragged() {
         state.drag = None;
-        // Rows were frozen during the drag; drop the spare track right away.
-        ui.ctx().request_repaint();
     }
     set_cursor(ui, &ruler, &rows, state, project, &view);
 
@@ -93,13 +83,6 @@ pub fn show(
     TimelineResponse {
         interacting: state.drag.is_some(),
         playhead_moved: state.playhead != playhead_before,
-    }
-}
-
-fn visible_tracks(state: &TimelineState, project: &Project) -> TrackCounts {
-    match state.drag {
-        Some(Drag::Clip { tracks, .. }) => tracks,
-        _ => TrackCounts::of(project),
     }
 }
 
@@ -206,16 +189,12 @@ fn edit_clips(
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && let Some((clip, zone)) = hit(view, project, origin)
         && let Some(edit) = ClipDrag::begin(project, clip, zone, axis.time(origin.x))
-        && let Some(video) = project.clip(clip).map(|c| c.track.is_video())
     {
         state.selected_clip = Some(clip);
-        state.drag = Some(Drag::Clip {
-            edit,
-            tracks: TrackCounts::of(project).with_spare(video),
-        });
+        state.drag = Some(Drag::Clip(edit));
     }
     if response.dragged()
-        && let Some(Drag::Clip { edit, .. }) = state.drag
+        && let Some(Drag::Clip(edit)) = state.drag
         && let Some(pos) = response.interact_pointer_pos()
         && let Some(clip) = project.clip(edit.clip)
     {
@@ -250,7 +229,7 @@ fn set_cursor(
     view: &View,
 ) {
     let icon = match state.drag {
-        Some(Drag::Clip { edit, .. }) => Some(zone_cursor(edit.zone)),
+        Some(Drag::Clip(edit)) => Some(zone_cursor(edit.zone)),
         Some(Drag::Range { .. }) => Some(CursorIcon::ResizeHorizontal),
         None => hover_cursor(ruler, rows, state, project, view),
     };
