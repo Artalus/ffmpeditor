@@ -17,6 +17,10 @@ branch out, 1+ commits, merge with `--no-ff`.
 always merge even if only 1 commit.
 merge messages explain the intent behind logical changes. omit `merged branch ...`, skip to point
 
+keep branches focused on single goal:
+* `shrink and dedupe the codebase; fix trim crash, silent config overwrite, orphaned preview ffmpeg and leftover partial exports` - bad message, too many things
+* `timeline widget to arrange, move and trim clips with the mouse` - better, more focused
+
 # amending changes
 
 if review requests for changes in the branch, the changes should be committed separately; in multiple commits if logically separated enough.
