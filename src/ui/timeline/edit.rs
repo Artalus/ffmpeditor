@@ -5,6 +5,8 @@ use crate::model::{ClipId, Project, Span, Track};
 
 const EDGE_GRAB: f32 = 6.0;
 pub const SNAP_DISTANCE: f32 = 8.0;
+/// Height of the lane's top band holding the fade handles, and their size.
+pub const FADE_HANDLE: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone {
@@ -15,6 +17,11 @@ pub enum Zone {
     Region {
         index: usize,
         start: bool,
+    },
+    /// A top-corner fade handle of the video or audio part.
+    Fade {
+        video: bool,
+        fade_in: bool,
     },
 }
 
@@ -53,6 +60,29 @@ pub fn hit_clip(clips: &[(ClipId, f32, f32)], x: f32) -> Option<(ClipId, Zone)> 
     }
     edge.map(|(_, id, zone)| (id, zone))
         .or(body.map(|id| (id, Zone::Body)))
+}
+
+/// Fade handle under `x` in the top band, `y` being the distance from the lane top.
+/// `handles` are (clip, fade-in end x, fade-out start x): a handle sits where its fade ends,
+/// so dragging continues from the current length instead of jumping to zero.
+/// Handles are checked before trim edges, so the top band never trims.
+pub fn hit_fade(handles: &[(ClipId, f32, f32)], x: f32, y: f32) -> Option<(ClipId, bool)> {
+    if y > FADE_HANDLE {
+        return None;
+    }
+    handles
+        .iter()
+        .rev()
+        .find_map(|&(id, fade_in_x, fade_out_x)| {
+            // Grab only on the side the triangle extends to, so handles stacked at one x
+            // (a crossfade, or a clip's fade-in meeting its fade-out) stay separately reachable.
+            let grabs = |d: f32| (0.0..=EDGE_GRAB).contains(&d);
+            if grabs(x - fade_in_x) {
+                Some((id, true))
+            } else {
+                grabs(fade_out_x - x).then_some((id, false))
+            }
+        })
 }
 
 /// Zone under `x` with its distance to that edge; edge zones are shrunk on narrow clips
@@ -124,6 +154,25 @@ impl ClipDrag {
             }
             Zone::Region { index, start } => {
                 project.set_mute_edge(self.clip, index, start, edge);
+            }
+            Zone::Fade { video, fade_in } => {
+                let seconds = if fade_in {
+                    pointer - clip.start
+                } else {
+                    clip.end() - pointer
+                };
+                // Snap to the crossfade overlap so the fade can match the marker exactly.
+                let overlap = if fade_in {
+                    project.overlap_before(self.clip)
+                } else {
+                    project.overlap_after(self.clip)
+                };
+                let seconds = if overlap > 0.0 && (seconds - overlap).abs() <= snapping.distance {
+                    overlap
+                } else {
+                    seconds
+                };
+                project.set_fade(self.clip, video, fade_in, seconds);
             }
         }
     }
@@ -230,6 +279,33 @@ mod tests {
         assert_eq!(hit_clip(&clips, 97.0), Some((ClipId(1), Zone::End)));
         assert_eq!(hit_clip(&clips, 83.0), Some((ClipId(2), Zone::Start)));
         assert_eq!(hit_clip(&clips, 300.0), None);
+    }
+
+    #[test]
+    fn fade_handles_sit_where_fades_end() {
+        let handles = [(ClipId(1), 0.0, 100.0), (ClipId(2), 120.0, 200.0)];
+        assert_eq!(hit_fade(&handles, 3.0, 4.0), Some((ClipId(1), true)));
+        assert_eq!(hit_fade(&handles, 197.0, 4.0), Some((ClipId(2), false)));
+        assert_eq!(hit_fade(&handles, 122.0, 4.0), Some((ClipId(2), true)));
+        assert_eq!(hit_fade(&handles, 118.0, 4.0), None);
+        assert_eq!(hit_fade(&handles, 3.0, 12.0), None);
+        assert_eq!(hit_fade(&handles, 50.0, 4.0), None);
+
+        let stacked = [(ClipId(1), 0.0, 50.0), (ClipId(2), 50.0, 100.0)];
+        assert_eq!(hit_fade(&stacked, 48.0, 4.0), Some((ClipId(1), false)));
+        assert_eq!(hit_fade(&stacked, 52.0, 4.0), Some((ClipId(2), true)));
+    }
+
+    #[test]
+    fn fade_drag_measures_from_clip_edge() {
+        let (mut project, [a, ..]) = sample();
+        let zone = Zone::Fade {
+            video: true,
+            fade_in: false,
+        };
+        let drag = ClipDrag::begin(&project, a, zone, 10.0).unwrap();
+        drag.apply(&mut project, 7.5, None, 10.0, SNAP);
+        assert_eq!(project.clip(a).unwrap().video.fade_out, 2.5);
     }
 
     #[test]

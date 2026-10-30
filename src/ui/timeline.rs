@@ -5,7 +5,7 @@ mod paint;
 use egui::{CursorIcon, PointerButton, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2};
 
 use self::edit::{
-    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_region_edge, opposite_edge,
+    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_fade, hit_region_edge, opposite_edge,
     range_selection,
 };
 use self::layout::{Areas, LaneKind, TimeAxis, TrackCounts, View, content_height, layout_lanes};
@@ -22,6 +22,8 @@ pub struct TimelineState {
     pub selected_clip: Option<ClipId>,
     /// Clip under the last right-click; the context menu acts on it.
     menu_clip: Option<ClipId>,
+    /// Lane kind of that right-click: fade reset targets the video or audio part.
+    menu_video: bool,
     /// Vertical scroll of the track rows, points.
     scroll_y: f32,
     drag: Option<Drag>,
@@ -98,6 +100,7 @@ pub fn show(
         project,
         media,
         visuals: ui.visuals(),
+        fade_highlight: fade_highlight(ui, &rows, state, project, &view),
     };
     paint::timeline(ui.painter(), &scene);
     let delete_track = track_controls(ui, state, project, &areas, &view);
@@ -212,6 +215,7 @@ fn edit_clips(
         && let Some(pos) = response.interact_pointer_pos()
     {
         state.menu_clip = hit(view, project, pos).map(|(clip, _)| clip);
+        state.menu_video = view.lane_at(pos).is_some_and(|l| l.kind == LaneKind::Video);
         if state.menu_clip.is_some() {
             state.selected_clip = state.menu_clip;
         }
@@ -272,6 +276,8 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
             return;
         };
         let muted = clip.audio.muted;
+        let video = state.menu_video;
+        let (fade_in, fade_out) = clip.fades(video);
         let selection = state
             .selection
             .filter(|s| s.intersect(clip.span()).is_some());
@@ -296,6 +302,24 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
             project.unmute_range(id, range);
             ui.close();
         }
+        ui.menu_button("Reset fade", |ui| {
+            for (label, reset_in, reset_out) in [
+                ("Fade-in", true, false),
+                ("Fade-out", false, true),
+                ("Both", true, true),
+            ] {
+                let active = (reset_in && fade_in > 0.0) || (reset_out && fade_out > 0.0);
+                if ui.add_enabled(active, egui::Button::new(label)).clicked() {
+                    if reset_in {
+                        project.set_fade(id, video, true, 0.0);
+                    }
+                    if reset_out {
+                        project.set_fade(id, video, false, 0.0);
+                    }
+                    ui.close();
+                }
+            }
+        });
     });
 }
 
@@ -306,8 +330,22 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
         .into_iter()
         .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
+    let video = lane.kind == LaneKind::Video;
+    let handles: Vec<_> = view
+        .visible_clips(project, lane.track)
+        .into_iter()
+        .map(|c| {
+            let (fade_in, fade_out) = c.fades(video);
+            let x = |t| view.axis.x(t);
+            (c.id, x(c.start + fade_in), x(c.end() - fade_out))
+        })
+        .collect();
+    let top = pos.y - view.lane_rect(lane).top();
+    if let Some((id, fade_in)) = hit_fade(&handles, pos.x, top) {
+        return Some((id, Zone::Fade { video, fade_in }));
+    }
     let (id, zone) = hit_clip(&clips, pos.x)?;
-    // Clip trim zones win over region edges, which win over the clip body.
+    // Fade handles win over trim zones, which win over region edges, which win over the clip body.
     if zone == Zone::Body
         && lane.kind == LaneKind::Audio
         && let Some(clip) = project.clip(id)
@@ -324,6 +362,50 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
         }
     }
     Some((id, zone))
+}
+
+/// The fade handle a drag would affect: hovered, or held from the moment the button goes down
+/// (egui reports a drag only after its threshold, too late for feedback).
+#[derive(Clone, Copy)]
+pub struct FadeHighlight {
+    pub clip: ClipId,
+    pub video: bool,
+    pub fade_in: bool,
+    pub held: bool,
+}
+
+fn fade_highlight(
+    ui: &Ui,
+    rows: &Response,
+    state: &TimelineState,
+    project: &Project,
+    view: &View,
+) -> Option<FadeHighlight> {
+    // The press origin stops matching once the handle follows the pointer away.
+    if let Some(Drag::Clip(ClipDrag {
+        clip,
+        zone: Zone::Fade { video, fade_in },
+        ..
+    })) = state.drag
+    {
+        return Some(FadeHighlight {
+            clip,
+            video,
+            fade_in,
+            held: true,
+        });
+    }
+    let (pressed, origin) = ui.input(|i| (i.pointer.primary_down(), i.pointer.press_origin()));
+    let pos = if pressed { origin } else { rows.hover_pos() }?;
+    match hit(view, project, pos)? {
+        (clip, Zone::Fade { video, fade_in }) => Some(FadeHighlight {
+            clip,
+            video,
+            fade_in,
+            held: pressed,
+        }),
+        _ => None,
+    }
 }
 
 fn set_cursor(
@@ -362,7 +444,8 @@ fn hover_cursor(
         });
     }
     match hit(view, project, rows.hover_pos()?) {
-        None => Some(CursorIcon::Text),
+        // Empty lanes only move the playhead; range selection lives on the ruler.
+        None => None,
         Some((_, Zone::Body)) => None,
         Some((_, zone)) => Some(zone_cursor(zone)),
     }
@@ -370,7 +453,10 @@ fn hover_cursor(
 
 fn zone_cursor(zone: Zone) -> CursorIcon {
     match zone {
-        Zone::Start | Zone::End | Zone::Region { .. } => CursorIcon::ResizeHorizontal,
+        Zone::Start | Zone::End => CursorIcon::ResizeColumn,
+        Zone::Fade { fade_in: true, .. } => CursorIcon::ResizeNorthWest,
+        Zone::Fade { fade_in: false, .. } => CursorIcon::ResizeNorthEast,
+        Zone::Region { .. } => CursorIcon::ResizeHorizontal,
         Zone::Body => CursorIcon::Grabbing,
     }
 }
@@ -384,6 +470,7 @@ impl Default for TimelineState {
             selection: None,
             selected_clip: None,
             menu_clip: None,
+            menu_video: false,
             scroll_y: 0.0,
             drag: None,
             used_video: Vec::new(),
