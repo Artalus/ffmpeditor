@@ -18,7 +18,7 @@ use crate::ui::dialogs::{Outcome, SettingsDialog, UnsavedChoice};
 use crate::ui::export::ExportDialog;
 use crate::ui::file_name;
 use crate::ui::project_settings::ProjectSettingsDialog;
-use crate::ui::timeline::{TimelineResponse, TimelineState};
+use crate::ui::timeline::{EmptyMute, TimelineResponse, TimelineState};
 use commands::{Command, MenuState};
 use editing::step_frames;
 use export::{RunningExport, start_export};
@@ -61,6 +61,8 @@ enum Dialog {
     OverwriteConfig(AppConfig, PathBuf),
     /// A non-empty track the user wants gone.
     DeleteTrack(Track),
+    /// A mute region dragged down to nothing.
+    EmptyMute(EmptyMute),
     ProjectSettings(ProjectSettingsDialog),
     Export(ExportDialog),
 }
@@ -129,6 +131,10 @@ impl eframe::App for App {
         self.timeline_busy = timeline.interacting;
         if let Some(track) = timeline.delete_track {
             self.dialog = Dialog::DeleteTrack(track);
+            ui.ctx().request_repaint();
+        }
+        if let Some(empty) = timeline.empty_mute {
+            self.dialog = Dialog::EmptyMute(empty);
             ui.ctx().request_repaint();
         }
         self.viewer(ui);
@@ -280,6 +286,18 @@ impl App {
                         }
                     }
                 }
+            }
+            Dialog::EmptyMute(empty) => {
+                let empty = *empty;
+                let keep = match ui::dialogs::confirm_remove_empty_mute(ctx) {
+                    Outcome::Open => return,
+                    Outcome::Accepted(()) => false,
+                    Outcome::Cancelled => true,
+                };
+                self.dialog = Dialog::None;
+                let region = keep.then_some(empty.original);
+                self.project
+                    .set_mute_region(empty.clip, empty.index, region);
             }
             Dialog::ProjectSettings(dialog) => match dialog.show(ctx) {
                 Outcome::Open => {}

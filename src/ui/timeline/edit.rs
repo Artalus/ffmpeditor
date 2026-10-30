@@ -11,6 +11,11 @@ pub enum Zone {
     Body,
     Start,
     End,
+    /// An edge of mute region `index` on an audio lane.
+    Region {
+        index: usize,
+        start: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,6 +24,8 @@ pub struct ClipDrag {
     pub zone: Zone,
     /// Pointer time minus the grabbed edge at press, so the clip doesn't jump to the pointer.
     grab_offset: f64,
+    /// The grabbed mute region before the drag, so an empty result can be undone.
+    pub original: Option<Span>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,14 +75,22 @@ fn zone_at(x0: f32, x1: f32, x: f32) -> Option<(Zone, f32)> {
 impl ClipDrag {
     pub fn begin(project: &Project, clip: ClipId, zone: Zone, pointer: f64) -> Option<Self> {
         let clip = project.clip(clip)?;
-        let edge = match zone {
-            Zone::End => clip.end(),
-            Zone::Body | Zone::Start => clip.start,
+        let region = match zone {
+            Zone::Region { index, .. } => Some(*clip.audio.mute_regions.get(index)?),
+            _ => None,
+        };
+        let edge = match (zone, region) {
+            (Zone::Region { start, .. }, Some(r)) => {
+                clip.source_to_timeline(if start { r.start } else { r.end })
+            }
+            (Zone::End, _) => clip.end(),
+            _ => clip.start,
         };
         Some(Self {
             clip: clip.id,
             zone,
             grab_offset: pointer - edge,
+            original: region,
         })
     }
 
@@ -107,8 +122,22 @@ impl ClipDrag {
                 let end = snap_time(edge, &targets, snapping.distance);
                 project.trim_clip_end(self.clip, end, source_duration);
             }
+            Zone::Region { index, start } => {
+                project.set_mute_edge(self.clip, index, start, edge);
+            }
         }
     }
+}
+
+/// Nearest region edge within `EDGE_GRAB` of `x`; `regions` are the `(start, end)` screen xs of each.
+pub fn hit_region_edge(regions: &[(f32, f32)], x: f32) -> Option<(usize, bool)> {
+    regions
+        .iter()
+        .enumerate()
+        .flat_map(|(i, &(x0, x1))| [((x0 - x).abs(), i, true), ((x1 - x).abs(), i, false)])
+        .filter(|&(d, ..)| d <= EDGE_GRAB)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, i, start)| (i, start))
 }
 
 pub fn range_selection(project: &Project, anchor: f64, pointer: f64, distance: f64) -> Span {
@@ -201,6 +230,16 @@ mod tests {
         assert_eq!(hit_clip(&clips, 97.0), Some((ClipId(1), Zone::End)));
         assert_eq!(hit_clip(&clips, 83.0), Some((ClipId(2), Zone::Start)));
         assert_eq!(hit_clip(&clips, 300.0), None);
+    }
+
+    #[test]
+    fn region_edges_by_distance() {
+        let regions = [(100.0, 150.0), (152.0, 200.0)];
+        assert_eq!(hit_region_edge(&regions, 96.0), Some((0, true)));
+        assert_eq!(hit_region_edge(&regions, 125.0), None);
+        assert_eq!(hit_region_edge(&regions, 151.5), Some((1, true)));
+        assert_eq!(hit_region_edge(&regions, 149.0), Some((0, false)));
+        assert_eq!(hit_region_edge(&[], 1.0), None);
     }
 
     #[test]

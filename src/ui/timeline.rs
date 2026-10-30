@@ -5,9 +5,10 @@ mod paint;
 use egui::{CursorIcon, PointerButton, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2};
 
 use self::edit::{
-    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
+    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_region_edge, opposite_edge,
+    range_selection,
 };
-use self::layout::{Areas, TimeAxis, TrackCounts, View, content_height, layout_lanes};
+use self::layout::{Areas, LaneKind, TimeAxis, TrackCounts, View, content_height, layout_lanes};
 use crate::media::MediaCache;
 use crate::model::{ClipId, Project, Span, Track};
 
@@ -19,6 +20,8 @@ pub struct TimelineState {
     /// Export / preview range picked on the ruler.
     pub selection: Option<Span>,
     pub selected_clip: Option<ClipId>,
+    /// Clip under the last right-click; the context menu acts on it.
+    menu_clip: Option<ClipId>,
     /// Vertical scroll of the track rows, points.
     scroll_y: f32,
     drag: Option<Drag>,
@@ -33,6 +36,16 @@ pub struct TimelineResponse {
     pub playhead_moved: bool,
     /// Non-empty track the user asked to delete; the app confirms first.
     pub delete_track: Option<Track>,
+    /// Mute region the user dragged down to nothing; the app asks whether to drop it.
+    pub empty_mute: Option<EmptyMute>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct EmptyMute {
+    pub clip: ClipId,
+    pub index: usize,
+    /// The region before the drag, in source time.
+    pub original: Span,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -71,7 +84,8 @@ pub fn show(
         content_top: areas.rows.top() - state.scroll_y,
     };
     edit_range(ui, &ruler, state, project, &view);
-    edit_clips(ui, &rows, state, project, media, &view);
+    let empty_mute = edit_clips(ui, &rows, state, project, media, &view);
+    clip_menu(&rows, state, project);
     if state.drag.is_some() && !ruler.dragged() && !rows.dragged() {
         state.drag = None;
     }
@@ -91,6 +105,7 @@ pub fn show(
         interacting: state.drag.is_some(),
         playhead_moved: state.playhead != playhead_before,
         delete_track,
+        empty_mute,
     }
 }
 
@@ -185,13 +200,21 @@ fn edit_clips(
     project: &mut Project,
     media: &MediaCache,
     view: &View,
-) {
+) -> Option<EmptyMute> {
     let axis = &view.axis;
     if response.clicked()
         && let Some(pos) = response.interact_pointer_pos()
     {
         state.selected_clip = hit(view, project, pos).map(|(clip, _)| clip);
         state.playhead = axis.time(pos.x).max(0.0);
+    }
+    if response.secondary_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        state.menu_clip = hit(view, project, pos).map(|(clip, _)| clip);
+        if state.menu_clip.is_some() {
+            state.selected_clip = state.menu_clip;
+        }
     }
     if response.drag_started_by(PointerButton::Primary)
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
@@ -216,6 +239,64 @@ fn edit_clips(
         };
         edit.apply(project, axis.time(pos.x), track, source_duration, snapping);
     }
+    if response.drag_stopped()
+        && let Some(Drag::Clip(edit)) = state.drag
+    {
+        return finish_region_drag(project, edit, axis.seconds(1.0));
+    }
+    None
+}
+
+/// Merges the dragged region into its neighbours, unless it shrank below `min_len`:
+/// that one is left alone for the app to ask about.
+fn finish_region_drag(project: &mut Project, edit: ClipDrag, min_len: f64) -> Option<EmptyMute> {
+    let (Zone::Region { index, .. }, Some(original)) = (edit.zone, edit.original) else {
+        return None;
+    };
+    let region = *project.clip(edit.clip)?.audio.mute_regions.get(index)?;
+    if region.len() < min_len {
+        return Some(EmptyMute {
+            clip: edit.clip,
+            index,
+            original,
+        });
+    }
+    project.merge_mute_regions(edit.clip);
+    None
+}
+
+fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) {
+    let Some(id) = state.menu_clip else { return };
+    rows.context_menu(|ui| {
+        let Some(clip) = project.clip(id) else {
+            return;
+        };
+        let muted = clip.audio.muted;
+        let selection = state
+            .selection
+            .filter(|s| s.intersect(clip.span()).is_some());
+        let label = if muted { "Unmute clip" } else { "Mute clip" };
+        if ui.button(label).clicked() {
+            project.set_muted(id, !muted);
+            ui.close();
+        }
+        let enabled = selection.is_some();
+        let range = selection.unwrap_or(Span::new(0.0, 0.0));
+        if ui
+            .add_enabled(enabled, egui::Button::new("Mute selection"))
+            .clicked()
+        {
+            project.mute_range(id, range);
+            ui.close();
+        }
+        if ui
+            .add_enabled(enabled, egui::Button::new("Unmute selection"))
+            .clicked()
+        {
+            project.unmute_range(id, range);
+            ui.close();
+        }
+    });
 }
 
 fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
@@ -225,7 +306,24 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
         .into_iter()
         .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
-    hit_clip(&clips, pos.x)
+    let (id, zone) = hit_clip(&clips, pos.x)?;
+    // Clip trim zones win over region edges, which win over the clip body.
+    if zone == Zone::Body
+        && lane.kind == LaneKind::Audio
+        && let Some(clip) = project.clip(id)
+    {
+        let x = |t| view.axis.x(clip.source_to_timeline(t));
+        let edges: Vec<_> = clip
+            .audio
+            .mute_regions
+            .iter()
+            .map(|r| (x(r.start), x(r.end)))
+            .collect();
+        if let Some((index, start)) = hit_region_edge(&edges, pos.x) {
+            return Some((id, Zone::Region { index, start }));
+        }
+    }
+    Some((id, zone))
 }
 
 fn set_cursor(
@@ -272,7 +370,7 @@ fn hover_cursor(
 
 fn zone_cursor(zone: Zone) -> CursorIcon {
     match zone {
-        Zone::Start | Zone::End => CursorIcon::ResizeHorizontal,
+        Zone::Start | Zone::End | Zone::Region { .. } => CursorIcon::ResizeHorizontal,
         Zone::Body => CursorIcon::Grabbing,
     }
 }
@@ -285,6 +383,7 @@ impl Default for TimelineState {
             playhead: 0.0,
             selection: None,
             selected_clip: None,
+            menu_clip: None,
             scroll_y: 0.0,
             drag: None,
             used_video: Vec::new(),

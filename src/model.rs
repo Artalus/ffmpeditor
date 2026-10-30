@@ -124,6 +124,18 @@ pub struct Span {
     pub end: f64,
 }
 
+fn normalize(regions: &mut Vec<Span>) {
+    regions.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut merged: Vec<Span> = Vec::new();
+    for s in regions.drain(..) {
+        match merged.last_mut() {
+            Some(last) if s.start <= last.end => last.end = last.end.max(s.end),
+            _ => merged.push(s),
+        }
+    }
+    *regions = merged;
+}
+
 impl Project {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text =
@@ -225,6 +237,92 @@ impl Project {
         if let Some(clip) = self.clip_mut(id) {
             clip.start = start.max(0.0);
             clip.track = track;
+        }
+    }
+
+    pub fn set_muted(&mut self, id: ClipId, muted: bool) {
+        if let Some(clip) = self.clip_mut(id) {
+            clip.audio.muted = muted;
+        }
+    }
+
+    /// `range` is in timeline time; regions are stored in source time.
+    pub fn mute_range(&mut self, id: ClipId, range: Span) {
+        self.edit_regions(id, range, |regions, r| {
+            regions.push(r);
+            normalize(regions);
+        });
+    }
+
+    /// Moves one edge of mute region `index` to timeline time `t`; stays inside the visible source
+    /// and never crosses the other edge. Overlaps are left for `merge_mute_regions` once the drag ends.
+    pub fn set_mute_edge(&mut self, id: ClipId, index: usize, start: bool, t: f64) {
+        let Some(clip) = self.clip_mut(id) else {
+            return;
+        };
+        let t = clip
+            .timeline_to_source(t)
+            .clamp(clip.source_in, clip.source_out());
+        if let Some(r) = clip.audio.mute_regions.get_mut(index) {
+            if start {
+                r.start = t.min(r.end);
+            } else {
+                r.end = t.max(r.start);
+            }
+        }
+    }
+
+    /// Replaces region `index` (`None` removes it), then merges overlaps.
+    pub fn set_mute_region(&mut self, id: ClipId, index: usize, region: Option<Span>) {
+        let Some(clip) = self.clip_mut(id) else {
+            return;
+        };
+        let regions = &mut clip.audio.mute_regions;
+        if index < regions.len() {
+            match region {
+                Some(r) => regions[index] = r,
+                None => {
+                    regions.remove(index);
+                }
+            }
+        }
+        normalize(regions);
+    }
+
+    pub fn merge_mute_regions(&mut self, id: ClipId) {
+        if let Some(clip) = self.clip_mut(id) {
+            normalize(&mut clip.audio.mute_regions);
+        }
+    }
+
+    pub fn unmute_range(&mut self, id: ClipId, range: Span) {
+        self.edit_regions(id, range, |regions, r| {
+            let kept = regions.iter().flat_map(|s| {
+                [
+                    Span {
+                        start: s.start,
+                        end: s.end.min(r.start),
+                    },
+                    Span {
+                        start: s.start.max(r.end),
+                        end: s.end,
+                    },
+                ]
+            });
+            *regions = kept.filter(|s| !s.is_empty()).collect();
+        });
+    }
+
+    fn edit_regions(&mut self, id: ClipId, range: Span, edit: impl FnOnce(&mut Vec<Span>, Span)) {
+        let Some(clip) = self.clip_mut(id) else {
+            return;
+        };
+        if let Some(r) = range.intersect(clip.span()) {
+            let r = Span::new(
+                clip.timeline_to_source(r.start),
+                clip.timeline_to_source(r.end),
+            );
+            edit(&mut clip.audio.mute_regions, r);
         }
     }
 
@@ -503,6 +601,72 @@ mod tests {
         let source = project.add_source("a.mp4".into());
         let clip = project.append_clip(source, Track::Video(0), duration);
         (project, clip)
+    }
+
+    #[test]
+    fn mute_ranges_merge_split_and_clip() {
+        let (mut project, clip) = project_with_clip(10.0);
+        project.mute_range(clip, Span::new(1.0, 3.0));
+        project.mute_range(clip, Span::new(3.0, 4.0));
+        project.mute_range(clip, Span::new(6.0, 7.0));
+        let regions = |p: &Project| p.clip(clip).unwrap().audio.mute_regions.clone();
+        assert_eq!(
+            regions(&project),
+            [Span::new(1.0, 4.0), Span::new(6.0, 7.0)]
+        );
+        project.unmute_range(clip, Span::new(2.0, 3.0));
+        assert_eq!(
+            regions(&project),
+            [
+                Span::new(1.0, 2.0),
+                Span::new(3.0, 4.0),
+                Span::new(6.0, 7.0)
+            ]
+        );
+        project.mute_range(clip, Span::new(9.0, 20.0));
+        project.mute_range(clip, Span::new(20.0, 30.0));
+        assert_eq!(regions(&project).last(), Some(&Span::new(9.0, 10.0)));
+        assert_eq!(regions(&project).len(), 4);
+    }
+
+    #[test]
+    fn mute_edges_clamp_and_merge() {
+        let (mut project, clip) = project_with_clip(10.0);
+        project.mute_range(clip, Span::new(1.0, 2.0));
+        project.mute_range(clip, Span::new(4.0, 5.0));
+        let regions = |p: &Project| p.clip(clip).unwrap().audio.mute_regions.clone();
+        // Can't cross the partner edge or leave the clip.
+        project.set_mute_edge(clip, 0, false, 0.5);
+        assert_eq!(regions(&project)[0], Span::new(1.0, 1.0));
+        project.set_mute_edge(clip, 1, false, 99.0);
+        assert_eq!(regions(&project)[1], Span::new(4.0, 10.0));
+        // Overlap stays until merged.
+        project.set_mute_edge(clip, 0, false, 4.5);
+        assert_eq!(regions(&project).len(), 2);
+        project.merge_mute_regions(clip);
+        assert_eq!(regions(&project), [Span::new(1.0, 10.0)]);
+        project.set_mute_region(clip, 0, Some(Span::new(2.0, 3.0)));
+        assert_eq!(regions(&project), [Span::new(2.0, 3.0)]);
+        project.set_mute_region(clip, 0, None);
+        assert!(regions(&project).is_empty());
+    }
+
+    #[test]
+    fn mute_region_survives_clip_move() {
+        let (mut project, clip) = project_with_clip(10.0);
+        project.mute_range(clip, Span::new(1.0, 2.0));
+        project.move_clip(clip, 5.0, Track::Video(0));
+        assert_eq!(
+            project.clip(clip).unwrap().audio.mute_regions,
+            [Span::new(1.0, 2.0)]
+        );
+        project.mute_range(clip, Span::new(5.0, 6.0));
+        assert_eq!(
+            project.clip(clip).unwrap().audio.mute_regions[0],
+            Span::new(0.0, 2.0)
+        );
+        project.set_muted(clip, true);
+        assert!(project.clip(clip).unwrap().audio.muted);
     }
 
     #[test]
