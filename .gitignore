@@ -1,3 +1,4 @@
 AI/knowledge/*
 !AI/knowledge/README.md
+.claude/worktrees/
 /target
