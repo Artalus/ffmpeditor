@@ -23,6 +23,7 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - render applies effective fades: video fade-in and audio fade-in = max(stored, overlap with earlier clip); audio fade-out = max(stored, overlap with later clip); video fade-out = stored (later clip fades in over it).
 - mute: whole clip flag, plus regions in source time, kept sorted and merged; regions stick to content when clip moves/trims.
 - media info (duration, size, fps) is not saved; re-probed on open.
+- placement of new clips: start = playhead, track = selected track if its kind fits, else V1/A1. if the span overlaps a clip there: nearest track above of the same kind that is free over the span, else a new track; the app confirms either choice.
 
 ## timeline
 - rows: per video track a video lane + its linked audio lane; then one lane per audio track.
@@ -31,12 +32,13 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - snapping 8 px: clip edges, playhead, 0. fade drags also snap to the crossfade overlap.
 - draw order per lane: clip bodies with media and own fade shade; fade lines, names, borders; crossfade X; handles.
 - trash hint: track had clips this session, is empty, is not the last of its kind.
+- selected track: set by clicking a track name, empty lane space or a clip; runtime only, not saved.
 - edits mutate the project directly; app takes an undo snapshot when no drag is in progress.
 
 ## app
 - undo = whole-project snapshots, 500 steps.
 - shortcuts ignored while a dialog is open, a text field has focus, or a timeline drag runs. plain-key shortcuts require no modifiers.
-- import: video source → V1, audio-only → A1, appended at track end.
+- `Media` menu: import through the placement rule. imported files are grouped by track kind; each group is placed back to back as one span, with at most one confirmation per group.
 - unreadable config: warning at start, confirmation before it is overwritten.
 
 ## render
