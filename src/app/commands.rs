@@ -73,7 +73,6 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
                 item(ui, &mut command, Command::Save, true);
                 item(ui, &mut command, Command::SaveAs, true);
                 ui.separator();
-                item(ui, &mut command, Command::Import, true);
                 item(ui, &mut command, Command::Export, !state.export_running);
                 ui.separator();
                 item(ui, &mut command, Command::Quit, true);
@@ -89,6 +88,9 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
                 item(ui, &mut command, Command::GoToEnd, true);
                 item(ui, &mut command, Command::PreviousFrame, true);
                 item(ui, &mut command, Command::NextFrame, true);
+            });
+            ui.menu_button("Media", |ui| {
+                item(ui, &mut command, Command::Import, true);
             });
             ui.menu_button("Project", |ui| {
                 item(ui, &mut command, Command::ProjectSettings, true);
