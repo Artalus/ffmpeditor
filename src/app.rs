@@ -198,6 +198,7 @@ impl App {
                 self.save_as();
             }
             Command::Import => self.import(),
+            Command::AddText => self.add_text(),
             Command::Export => self.open_export_dialog(),
             // Goes through handle_close_request, which owns the unsaved-changes check.
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),

@@ -133,7 +133,7 @@ impl App {
     pub(super) fn finish_placement(&mut self, group: ImportGroup, accepted: bool) {
         if !accepted {
             for id in group.new_sources {
-                if self.project.clips.iter().all(|c| c.source != id) {
+                if self.project.clips.iter().all(|c| c.source() != Some(id)) {
                     self.project.remove_source(id);
                 }
             }
@@ -143,6 +143,25 @@ impl App {
             self.project.add_track(group.video);
         }
         self.insert_group(&group, group.target);
+    }
+
+    /// Placeholder rule until text goes through the import confirmation: no dialog.
+    pub(super) fn add_text(&mut self) {
+        let start = self.timeline.playhead;
+        let from = self
+            .timeline
+            .selected_track
+            .filter(|t| t.is_video() && t.index() < self.project.tracks.count(true))
+            .unwrap_or(Track::Video(0));
+        let track = match self.project.placement(from, Span::new(start, start + 5.0)) {
+            Placement::Free(track) | Placement::Above(track) => track,
+            Placement::NewTrack => {
+                self.project.add_track(true);
+                Track::Video(self.project.tracks.count(true) - 1)
+            }
+        };
+        let id = self.project.add_text(track, start);
+        self.timeline.selected_clip = Some(id);
     }
 
     fn insert_group(&mut self, group: &ImportGroup, track: Track) {

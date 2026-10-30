@@ -238,8 +238,9 @@ fn edit_clips(
         && let Some(clip) = project.clip(edit.clip)
     {
         let track = view.nearest_track(pos.y, clip.track.is_video());
-        let source_duration = media
-            .info(clip.source)
+        let source_duration = clip
+            .source()
+            .and_then(|source| media.info(source))
             .map_or(f64::INFINITY, |i| i.duration);
         let snapping = Snapping {
             playhead: state.playhead,

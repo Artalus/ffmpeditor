@@ -1,12 +1,15 @@
 //! Filter graph shared by export and preview.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::media::MediaInfos;
-use crate::model::{Clip, Project, Span};
+use crate::model::{Clip, Project, Span, TextProps};
 
 const SAMPLE_RATE: u32 = 48_000;
+/// Text size is in points of this many per frame height.
+const POINTS_PER_FRAME: f64 = 1080.0;
 
 /// What to render; `range` gets snapped to the project frame grid.
 pub struct Target {
@@ -34,7 +37,8 @@ pub struct FrameRate {
 
 struct Layer<'a> {
     clip: &'a Clip,
-    path: &'a Path,
+    /// Absent for text, which has no ffmpeg input.
+    input: Option<Input<'a>>,
     /// Part of the clip inside the range, timeline time.
     visible: Span,
     input_end: f64,
@@ -42,6 +46,11 @@ struct Layer<'a> {
     audio: bool,
     overlap_before: f64,
     overlap_after: f64,
+}
+
+struct Input<'a> {
+    index: usize,
+    path: &'a Path,
 }
 
 impl Graph {
@@ -58,7 +67,7 @@ pub fn build(project: &Project, infos: &MediaInfos, target: &Target) -> Graph {
     let rate = FrameRate::from_fps(project.settings.fps);
     let range = rate.snap(target.range);
     let layers = layers(project, infos, target, range);
-    let inputs = layers.iter().flat_map(input_args).collect();
+    let inputs = layers.iter().filter_map(input_args).flatten().collect();
     let mut chains = vec![base_video(target, rate, range)];
     chains.extend(video_layers(&layers).map(|(i, layer)| clip_video(i, layer, target, rate)));
     chains.push(overlays(&layers));
@@ -84,15 +93,23 @@ fn layers<'a>(
         .clips
         .iter()
         .filter_map(|clip| {
-            let info = infos.get(&clip.source)?;
-            let source = project.source(clip.source)?;
             let visible = clip.span().intersect(range)?;
-            let video = clip.track.is_video() && info.video.is_some();
-            let audio =
-                target.audio && info.has_audio && !clip.audio.muted && clip.audio.volume > 0.0;
+            let (input, video, audio) = match clip.source() {
+                Some(id) => {
+                    let info = infos.get(&id)?;
+                    let path = &project.source(id)?.path;
+                    let video = clip.track.is_video() && info.video.is_some();
+                    let audio = target.audio
+                        && info.has_audio
+                        && !clip.audio.muted
+                        && clip.audio.volume > 0.0;
+                    (Some(Input { index: 0, path }), video, audio)
+                }
+                None => (None, clip.track.is_video(), false),
+            };
             (video || audio).then(|| Layer {
                 clip,
-                path: &source.path,
+                input,
                 visible,
                 input_end: clip.end().min(range.end + target.input_lookahead),
                 video,
@@ -109,6 +126,13 @@ fn layers<'a>(
             .then(a.clip.start.total_cmp(&b.clip.start))
             .then(a.clip.id.cmp(&b.clip.id))
     });
+    for (index, input) in layers
+        .iter_mut()
+        .filter_map(|l| l.input.as_mut())
+        .enumerate()
+    {
+        input.index = index;
+    }
     layers
 }
 
@@ -121,16 +145,17 @@ fn audio_layers<'a, 'b>(layers: &'a [Layer<'b>]) -> impl Iterator<Item = (usize,
     layers.iter().enumerate().filter(|(_, layer)| layer.audio)
 }
 
-fn input_args(layer: &Layer) -> [String; 6] {
+fn input_args(layer: &Layer) -> Option<[String; 6]> {
     let t0 = layer.visible.start;
-    [
+    let input = layer.input.as_ref()?;
+    Some([
         "-ss".into(),
         secs(layer.clip.timeline_to_source(t0).max(0.0)),
         "-t".into(),
         secs(layer.input_end - t0),
         "-i".into(),
-        layer.path.to_string_lossy().into_owned(),
-    ]
+        input.path.to_string_lossy().into_owned(),
+    ])
 }
 
 /// Black canvas whose timestamps are absolute timeline time, like every clip's.
@@ -148,10 +173,16 @@ fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> 
     let clip = layer.clip;
     let fade_in = clip.video.fade_in.max(layer.overlap_before);
     let fade_out = clip.video.fade_out;
+    if let Some(text) = clip.text() {
+        let fades = fades("fade", ":alpha=1", clip, fade_in, fade_out);
+        let source = text_source(layer, text, target, rate);
+        return format!("{source},format=yuva420p{fades}[v{index}]");
+    }
+    let input = layer.input.as_ref().map_or(0, |i| i.index);
     // Input-seeked frames are stamped relative to the seek point, keeping the sub-frame offset
     // of the first frame; fps start_time then pads the clip's first slot instead of leaving a gap.
     format!(
-        "[{index}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
+        "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
          scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,\
          format=yuva420p,pad={w}:{h}:-1:-1:color=black@0{fades}[v{index}]",
         t0 = secs(layer.visible.start),
@@ -159,6 +190,91 @@ fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> 
         h = target.height,
         fades = fades("fade", ":alpha=1", clip, fade_in, fade_out),
     )
+}
+
+/// Transparent canvas lasting the visible part of the clip, stamped at its timeline position.
+fn text_source(layer: &Layer, text: &TextProps, target: &Target, rate: FrameRate) -> String {
+    let transform = layer.clip.transform;
+    let fontsize = text.size * f64::from(target.height) / POINTS_PER_FRAME;
+    let outline = if text.outline {
+        format!(
+            ":borderw={}:bordercolor={}",
+            (fontsize / 16.0).round().max(1.0),
+            font_color(&text.outline_color)
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "color=c=black@0:s={w}x{h}:r={rate}:d={len},format=rgba,\
+         drawtext={font}:expansion=none:text={content}:fontsize={fontsize}:\
+         fontcolor={color}{outline}:x=w*{x}/100-text_w/2:y=h*{y}/100-text_h/2,\
+         setpts=PTS+round({t0}/TB)",
+        w = target.width,
+        h = target.height,
+        len = secs(layer.visible.len()),
+        font = font_option(),
+        content = escape_text(&text.text),
+        color = font_color(&text.color),
+        x = transform.x,
+        y = transform.y,
+        t0 = secs(layer.visible.start),
+    )
+}
+
+// Fontconfig in the Windows ffmpeg builds runs without a config and rescans every installed font
+// on each run, which takes 20+ s once the font files drop out of the OS file cache.
+// A font file skips fontconfig entirely.
+fn font_option() -> &'static str {
+    static FONT: OnceLock<String> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let windows = std::env::var_os("WINDIR").map_or_else(|| "C:/Windows".into(), PathBuf::from);
+        [
+            windows.join("Fonts/arial.ttf"),
+            "/System/Library/Fonts/Supplemental/Arial.ttf".into(),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into(),
+            "/usr/share/fonts/TTF/DejaVuSans.ttf".into(),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+        .map_or_else(
+            || "font=Sans".to_owned(),
+            |path| {
+                format!(
+                    "fontfile={}",
+                    escape_text(&path.to_string_lossy().replace('\\', "/"))
+                )
+            },
+        )
+    })
+}
+
+/// `#rrggbbaa` to ffmpeg's `0xrrggbbaa`; anything else renders white.
+fn font_color(color: &str) -> String {
+    match color.strip_prefix('#') {
+        Some(hex) if hex.len() == 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            format!("0x{hex}")
+        }
+        _ => "white".into(),
+    }
+}
+
+/// Escapes for drawtext's option parser, then for the filtergraph parser around it.
+fn escape_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    let option = escape(&text, &['\\', '\'', ':']);
+    escape(&option, &['\\', '\'', '[', ']', ',', ';'])
+}
+
+fn escape(text: &str, special: &[char]) -> String {
+    let mut out = String::new();
+    for c in text.chars() {
+        if special.contains(&c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn overlays(layers: &[Layer]) -> String {
@@ -202,8 +318,9 @@ fn clip_audio(index: usize, layer: &Layer, range: Span) -> String {
         .collect();
     // amix ignores timestamps, so the clip's position has to become real leading silence.
     // async/first_pts pads streams that start after the seek point (A/V offset in the source).
+    let input = layer.input.as_ref().map_or(0, |i| i.index);
     format!(
-        "[{index}:a:0]aresample={SAMPLE_RATE}:async=1:first_pts=0,\
+        "[{input}:a:0]aresample={SAMPLE_RATE}:async=1:first_pts=0,\
          aformat=sample_fmts=fltp:channel_layouts=stereo,\
          asetpts=PTS+round({t0}/TB){fades}{volume}{mutes},\
          asetpts=PTS-STARTPTS,adelay=delays={delay}S:all=1[a{index}]",
@@ -361,7 +478,7 @@ mod tests {
         tl.clip("inside.mp4", Track::Video(0), 2.0, 2.0);
         tl.clip("after.mp4", Track::Video(0), 4.0, 2.0);
         let unprobed = tl.clip("unprobed.mp4", Track::Video(1), 2.0, 2.0);
-        let source = tl.project.clip(unprobed).unwrap().source;
+        let source = tl.project.clip(unprobed).unwrap().source().unwrap();
         tl.infos.remove(&source);
         let muted = tl.clip_with(
             "muted.wav",
@@ -507,6 +624,76 @@ mod tests {
             "anullsrc=r=48000:cl=stereo,atrim=end_sample=432000[abase];\
              [abase][a0]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[a]"
         ));
+    }
+
+    #[test]
+    fn text_size_does_not_depend_on_project_resolution() {
+        let fontsize = |w, h| {
+            let mut tl = Timeline::new(w, h, 30.0);
+            let text = tl.project.add_text(Track::Video(0), 0.0);
+            let crate::model::Content::Text { text } = &mut tl.edit(text).content else {
+                unreachable!()
+            };
+            text.outline_color = "#ff0000ff".into();
+            let graph = tl.build_sized(0.0, 5.0, 960, 540);
+            let chain = graph.chain("color=c=black@0").to_owned();
+            assert!(chain.contains("bordercolor=0xff0000ff"), "{chain}");
+            chain
+                .split("fontsize=")
+                .nth(1)
+                .unwrap()
+                .split(':')
+                .next()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(fontsize(1920, 1080), "32");
+        assert_eq!(fontsize(1280, 720), "32");
+    }
+
+    #[test]
+    fn text_layer_has_no_input_and_scales_with_the_frame() {
+        let mut tl = Timeline::new(1920, 1080, 30.0);
+        tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
+        let text = tl.project.add_text(Track::Video(1), 2.0);
+        tl.edit(text).transform.x = 20.0;
+        tl.edit(text).video.fade_in = 1.0;
+        tl.clip("b.mp4", Track::Audio(0), 0.0, 10.0);
+        let graph = tl.build_sized(0.0, 10.0, 960, 540);
+        assert_eq!(graph.inputs.iter().filter(|a| *a == "-i").count(), 2);
+        let chain = graph.chain("color=c=black@0");
+        assert!(
+            chain.starts_with("color=c=black@0:s=960x540:r=30:d=5.000000,"),
+            "{chain}"
+        );
+        let drawtext = format!(
+            "drawtext={}:expansion=none:text=Text:fontsize=32:",
+            font_option()
+        );
+        assert!(chain.contains(&drawtext), "{chain}");
+        assert!(chain.contains("fontcolor=0xffffffff:borderw=2:bordercolor=0x000000ff:"));
+        assert!(
+            chain.contains(
+                ":x=w*20/100-text_w/2:y=h*50/100-text_h/2,setpts=PTS+round(2.000000/TB),"
+            )
+        );
+        assert!(chain.ends_with(",fade=t=in:st=2.000000:d=1.000000:alpha=1[v1]"));
+        assert!(
+            graph
+                .filter
+                .contains("[ov0][v1]overlay=eof_action=pass[ov1]")
+        );
+        assert!(graph.filter.contains("[1:a:0]aresample"));
+        assert!(graph.filter.contains("[abase][a0][a2]amix=inputs=3:"));
+    }
+
+    #[test]
+    fn text_is_escaped_for_drawtext_and_filtergraph() {
+        assert_eq!(
+            escape_text("a:b,'c'[d];e\\f\r\ng"),
+            r"a\\:b\,\\\'c\\\'\[d\]\;e\\\\f
+g"
+        );
     }
 
     #[test]
