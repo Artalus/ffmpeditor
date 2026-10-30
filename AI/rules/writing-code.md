@@ -31,9 +31,15 @@ def cheburek()
 reading code should be enough to understand what it does.
 comments should explain *why* not *what*; do not comment if the code is just following the spec.
 keep it short; nobody likes to read paragraphs of ai slop.
+```
+# short comments without capital and period
+
+# Multiline comments start with capital and end with period.
+# One sentence per line.
+```
 
 # code bloat
 
 strive to write as few code as possible to solve task.
 every once in a while we should take sessions to see if we can compact the codebase.
-when architect reviews worker code, take extra care
+when architect reviews worker code, take extra care to check if simpler solution to problem exists.
