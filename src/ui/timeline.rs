@@ -5,7 +5,7 @@ mod paint;
 use egui::{CursorIcon, PointerButton, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2};
 
 use self::edit::{
-    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_region_edge, opposite_edge,
+    ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_fade, hit_region_edge, opposite_edge,
     range_selection,
 };
 use self::layout::{Areas, LaneKind, TimeAxis, TrackCounts, View, content_height, layout_lanes};
@@ -306,8 +306,22 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
         .into_iter()
         .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
+    let video = lane.kind == LaneKind::Video;
+    let handles: Vec<_> = view
+        .visible_clips(project, lane.track)
+        .into_iter()
+        .map(|c| {
+            let (fade_in, fade_out) = c.fades(video);
+            let x = |t| view.axis.x(t);
+            (c.id, x(c.start + fade_in), x(c.end() - fade_out))
+        })
+        .collect();
+    let top = pos.y - view.lane_rect(lane).top();
+    if let Some((id, fade_in)) = hit_fade(&handles, pos.x, top) {
+        return Some((id, Zone::Fade { video, fade_in }));
+    }
     let (id, zone) = hit_clip(&clips, pos.x)?;
-    // Clip trim zones win over region edges, which win over the clip body.
+    // Fade handles win over trim zones, which win over region edges, which win over the clip body.
     if zone == Zone::Body
         && lane.kind == LaneKind::Audio
         && let Some(clip) = project.clip(id)
@@ -370,7 +384,9 @@ fn hover_cursor(
 
 fn zone_cursor(zone: Zone) -> CursorIcon {
     match zone {
-        Zone::Start | Zone::End | Zone::Region { .. } => CursorIcon::ResizeHorizontal,
+        Zone::Start | Zone::End | Zone::Region { .. } | Zone::Fade { .. } => {
+            CursorIcon::ResizeHorizontal
+        }
         Zone::Body => CursorIcon::Grabbing,
     }
 }

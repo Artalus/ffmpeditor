@@ -272,6 +272,21 @@ impl Project {
         }
     }
 
+    /// Sets one fade of the video or audio part; the two fades of a part never exceed the clip.
+    pub fn set_fade(&mut self, id: ClipId, video: bool, fade_in: bool, seconds: f64) {
+        let Some(clip) = self.clip_mut(id) else {
+            return;
+        };
+        let duration = clip.duration;
+        let (fi, fo) = if video {
+            (&mut clip.video.fade_in, &mut clip.video.fade_out)
+        } else {
+            (&mut clip.audio.fade_in, &mut clip.audio.fade_out)
+        };
+        let (fade, other) = if fade_in { (fi, *fo) } else { (fo, *fi) };
+        *fade = seconds.clamp(0.0, (duration - other).max(0.0));
+    }
+
     /// Replaces region `index` (`None` removes it), then merges overlaps.
     pub fn set_mute_region(&mut self, id: ClipId, index: usize, region: Option<Span>) {
         let Some(clip) = self.clip_mut(id) else {
@@ -464,6 +479,15 @@ impl Clip {
 
     pub fn source_out(&self) -> f64 {
         self.source_in + self.duration
+    }
+
+    /// (fade in, fade out) of the video or the audio part.
+    pub fn fades(&self, video: bool) -> (f64, f64) {
+        if video {
+            (self.video.fade_in, self.video.fade_out)
+        } else {
+            (self.audio.fade_in, self.audio.fade_out)
+        }
     }
 
     pub fn timeline_to_source(&self, t: f64) -> f64 {
@@ -802,6 +826,20 @@ mod tests {
         assert_eq!(project.overlap_before(first), 0.0);
         assert_eq!(project.overlap_after(second), 0.0);
         assert_eq!(project.overlap_before(other_track), 0.0);
+    }
+
+    #[test]
+    fn fades_are_clamped_and_per_part() {
+        let (mut project, [a]) = crate::test_support::project([(Track::Video(0), 0.0, 10.0)]);
+        project.set_fade(a, true, true, 4.0);
+        project.set_fade(a, true, false, 9.0);
+        let c = project.clip(a).unwrap();
+        assert_eq!((c.video.fade_in, c.video.fade_out), (4.0, 6.0));
+        assert_eq!((c.audio.fade_in, c.audio.fade_out), (0.0, 0.0));
+        project.set_fade(a, true, true, -1.0);
+        project.set_fade(a, false, true, 99.0);
+        let c = project.clip(a).unwrap();
+        assert_eq!((c.video.fade_in, c.audio.fade_in), (0.0, 10.0));
     }
 
     #[test]

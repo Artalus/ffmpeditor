@@ -4,6 +4,7 @@ use egui::{
 };
 
 use super::TimelineState;
+use super::edit::FADE_HANDLE;
 use super::layout::{Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height};
 use crate::media::MediaCache;
 use crate::model::{Clip, Project};
@@ -21,6 +22,7 @@ const MUTE_SHADE: Color32 = Color32::from_rgba_unmultiplied_const(110, 0, 0, 90)
 const FADE_SHADE: Color32 = Color32::from_black_alpha(120);
 const FADE_LINE: Color32 = Color32::from_gray(230);
 const CROSSFADE: Color32 = Color32::from_rgb(255, 205, 80);
+const FADE_HANDLE_FILL: Color32 = Color32::from_rgba_unmultiplied_const(255, 255, 255, 200);
 const LABEL_BG: Color32 = Color32::from_black_alpha(150);
 const LABEL_TEXT: Color32 = Color32::from_gray(235);
 const ERROR_TEXT: Color32 = Color32::from_rgb(255, 150, 150);
@@ -57,14 +59,50 @@ fn lanes(painter: &Painter, scene: &Scene) {
         }
         painter.rect_filled(rect, 0.0, lane_fill(lane, scene.visuals));
         let clips = scene.view.visible_clips(scene.project, lane.track);
+        // Shades go with each body so they darken only that clip's media; lines, names,
+        // borders, the crossfade marker and handles follow in later passes so no shade covers them.
         for clip in &clips {
             clip_in_lane(painter, scene, lane, rect, clip);
+        }
+        for clip in &clips {
+            clip_decor(painter, scene, lane, rect, clip);
         }
         for overlap in scene.project.crossfades(lane.track) {
             let axis = &scene.view.axis;
             cross_mark(painter, axis.x(overlap.start), axis.x(overlap.end), rect);
         }
+        for clip in &clips {
+            handles_in_lane(painter, scene, lane, rect, clip);
+        }
     }
+}
+
+fn handles_in_lane(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, clip: &Clip) {
+    let axis = &scene.view.axis;
+    let rect = clip_rect(scene, lane_rect, clip);
+    let (fade_in, fade_out) = clip.fades(lane.kind == LaneKind::Video);
+    let x = |t| axis.x(t).clamp(rect.left(), rect.right());
+    // Clipped to the exact clip edges, not `inner`, so handle corners meet the crossfade marker.
+    fade_handles(
+        &painter.with_clip_rect(rect),
+        rect,
+        [x(clip.start + fade_in), x(clip.end() - fade_out)],
+    );
+}
+
+fn clip_rect(scene: &Scene, lane_rect: Rect, clip: &Clip) -> Rect {
+    let axis = &scene.view.axis;
+    let y = lane_rect.y_range().shrink(1.0);
+    Rect::from_x_y_ranges(axis.x(clip.start)..=axis.x(clip.end()), y)
+}
+
+/// Huge offscreen extents lose f32 precision at the visible edge; draw only the visible part.
+fn drawn_rect(painter: &Painter, rect: Rect) -> Rect {
+    let view_x = painter.clip_rect().x_range().expand(CLIP_ROUNDING + 2.0);
+    Rect::from_x_y_ranges(
+        rect.left().max(view_x.min)..=rect.right().min(view_x.max),
+        rect.y_range(),
+    )
 }
 
 fn lane_fill(lane: &Lane, visuals: &Visuals) -> Color32 {
@@ -79,14 +117,8 @@ fn lane_fill(lane: &Lane, visuals: &Visuals) -> Color32 {
 
 fn clip_in_lane(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, clip: &Clip) {
     let axis = &scene.view.axis;
-    let y = lane_rect.y_range().shrink(1.0);
-    let rect = Rect::from_x_y_ranges(axis.x(clip.start)..=axis.x(clip.end()), y);
-    // Huge offscreen extents lose f32 precision at the visible edge; draw only the visible part.
-    let view_x = painter.clip_rect().x_range().expand(CLIP_ROUNDING + 2.0);
-    let drawn = Rect::from_x_y_ranges(
-        rect.left().max(view_x.min)..=rect.right().min(view_x.max),
-        y,
-    );
+    let rect = clip_rect(scene, lane_rect, clip);
+    let drawn = drawn_rect(painter, rect);
     let error = scene.media.error(clip.source);
     let selected = scene.state.selected_clip == Some(clip.id);
     let base = match (error, lane.kind) {
@@ -103,20 +135,34 @@ fn clip_in_lane(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, 
 
     let inner = painter.with_clip_rect(rect.shrink(1.0));
     match lane.kind {
-        LaneKind::Video => {
-            thumbnails(&inner, scene, clip, rect);
-            fades(&inner, axis, rect, clip.video.fade_in, clip.video.fade_out);
-        }
+        LaneKind::Video => thumbnails(&inner, scene, clip, rect),
         LaneKind::Audio => {
             waveform(&inner, scene, clip, rect);
             mute_regions(&inner, axis, rect, clip);
-            fades(&inner, axis, rect, clip.audio.fade_in, clip.audio.fade_out);
         }
     }
-    if lane.is_primary() {
-        label(&inner, scene, clip, error);
+    let (fade_in, fade_out) = clip.fades(lane.kind == LaneKind::Video);
+    for (shade, _) in fades(axis, rect, fade_in, fade_out) {
+        inner.add(Shape::convex_polygon(
+            shade.to_vec(),
+            FADE_SHADE,
+            Stroke::NONE,
+        ));
     }
+}
 
+fn clip_decor(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, clip: &Clip) {
+    let rect = clip_rect(scene, lane_rect, clip);
+    let inner = painter.with_clip_rect(rect.shrink(1.0));
+    let (fade_in, fade_out) = clip.fades(lane.kind == LaneKind::Video);
+    for (_, line) in fades(&scene.view.axis, rect, fade_in, fade_out) {
+        inner.line_segment(line, Stroke::new(1.5, FADE_LINE));
+    }
+    if lane.is_primary() {
+        label(&inner, scene, clip, scene.media.error(clip.source));
+    }
+    let drawn = drawn_rect(painter, rect);
+    let selected = scene.state.selected_clip == Some(clip.id);
     let border = if selected {
         Stroke::new(2.0, SELECTED_BORDER)
     } else {
@@ -199,35 +245,44 @@ fn mute_regions(painter: &Painter, axis: &TimeAxis, rect: Rect, clip: &Clip) {
     }
 }
 
-fn fades(painter: &Painter, axis: &TimeAxis, rect: Rect, fade_in: f64, fade_out: f64) {
+/// (shade triangle, fade line) for each non-zero fade of `rect`.
+fn fades(axis: &TimeAxis, rect: Rect, fade_in: f64, fade_out: f64) -> Vec<([Pos2; 3], [Pos2; 2])> {
     let width = |fade: f64| (axis.pixels_per_second as f64 * fade) as f32;
+    let mut shapes = Vec::new();
     if fade_in > 0.0 {
-        let x = (rect.left() + width(fade_in)).min(rect.right());
-        let top = pos2(x, rect.top());
-        fade_shape(
-            painter,
+        let top = pos2((rect.left() + width(fade_in)).min(rect.right()), rect.top());
+        shapes.push((
             [rect.left_top(), top, rect.left_bottom()],
             [rect.left_bottom(), top],
-        );
+        ));
     }
     if fade_out > 0.0 {
-        let x = (rect.right() - width(fade_out)).max(rect.left());
-        let top = pos2(x, rect.top());
-        fade_shape(
-            painter,
+        let top = pos2(
+            (rect.right() - width(fade_out)).max(rect.left()),
+            rect.top(),
+        );
+        shapes.push((
             [top, rect.right_top(), rect.right_bottom()],
             [top, rect.right_bottom()],
-        );
+        ));
     }
+    shapes
 }
 
-fn fade_shape(painter: &Painter, shade: [Pos2; 3], curve: [Pos2; 2]) {
-    painter.add(Shape::convex_polygon(
-        shade.to_vec(),
-        FADE_SHADE,
-        Stroke::NONE,
-    ));
-    painter.line_segment(curve, Stroke::new(1.5, FADE_LINE));
+/// Drawn on every clip: the handles are the only hint that fades can be dragged.
+fn fade_handles(painter: &Painter, rect: Rect, [fade_in_x, fade_out_x]: [f32; 2]) {
+    let size = FADE_HANDLE.min(rect.width() / 3.0);
+    for (fade_in, x) in [(true, fade_in_x), (false, fade_out_x)] {
+        // Right-angle corner at the fade end, mirroring the clip's own corner; kept inside the clip.
+        let (dx, x) = if fade_in {
+            (size, x.clamp(rect.left(), rect.right() - size))
+        } else {
+            (-size, x.clamp(rect.left() + size, rect.right()))
+        };
+        let p = pos2(x, rect.top());
+        let tri = vec![p, p + vec2(dx, 0.0), p + vec2(0.0, size)];
+        painter.add(Shape::convex_polygon(tri, FADE_HANDLE_FILL, Stroke::NONE));
+    }
 }
 
 fn cross_mark(painter: &Painter, x0: f32, x1: f32, lane_rect: Rect) {
