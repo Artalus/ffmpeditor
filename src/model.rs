@@ -14,6 +14,35 @@ pub struct Project {
     pub sources: Vec<Source>,
     #[serde(default)]
     pub clips: Vec<Clip>,
+    #[serde(default)]
+    pub tracks: Tracks,
+}
+
+/// How many tracks of each kind exist, empty or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tracks {
+    pub video: u32,
+    pub audio: u32,
+}
+
+impl Tracks {
+    pub fn count(&self, video: bool) -> u32 {
+        if video { self.video } else { self.audio }
+    }
+
+    fn count_mut(&mut self, video: bool) -> &mut u32 {
+        if video {
+            &mut self.video
+        } else {
+            &mut self.audio
+        }
+    }
+}
+
+impl Default for Tracks {
+    fn default() -> Self {
+        Self { video: 1, audio: 1 }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -99,7 +128,43 @@ impl Project {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let mut project: Self =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        project.cover_clip_tracks();
+        Ok(project)
+    }
+
+    /// Hand-edited or older files may have clips beyond the stored track counts.
+    pub fn cover_clip_tracks(&mut self) {
+        for clip in &self.clips {
+            let count = self.tracks.count_mut(clip.track.is_video());
+            *count = (*count).max(clip.track.index() + 1);
+        }
+    }
+
+    pub fn add_track(&mut self, video: bool) {
+        *self.tracks.count_mut(video) += 1;
+    }
+
+    /// Drops the track with its clips and renumbers the higher ones; refuses the last of a kind.
+    pub fn remove_track(&mut self, track: Track) -> bool {
+        let count = self.tracks.count_mut(track.is_video());
+        if *count <= 1 {
+            return false;
+        }
+        *count -= 1;
+        self.clips.retain(|c| c.track != track);
+        for clip in &mut self.clips {
+            if clip.track.is_video() == track.is_video() && clip.track.index() > track.index() {
+                let index = clip.track.index() - 1;
+                clip.track = if track.is_video() {
+                    Track::Video(index)
+                } else {
+                    Track::Audio(index)
+                };
+            }
+        }
+        true
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
@@ -624,5 +689,40 @@ mod tests {
         assert_eq!(a.intersect(Span::new(3.0, 8.0)), Some(Span::new(3.0, 5.0)));
         assert_eq!(a.intersect(Span::new(5.0, 8.0)), None);
         assert_eq!(Span::new(4.0, 1.0), Span::new(1.0, 4.0));
+    }
+
+    #[test]
+    fn remove_track_renumbers_higher_ones() {
+        let mut project = Project::default();
+        let source = project.add_source("a.mp4".into());
+        project.add_track(true);
+        project.add_track(true);
+        let ids = [0, 1, 2].map(|i| project.append_clip(source, Track::Video(i), 1.0));
+        let audio = project.append_clip(source, Track::Audio(0), 1.0);
+        assert!(project.remove_track(Track::Video(1)));
+        assert_eq!(project.tracks, Tracks { video: 2, audio: 1 });
+        assert!(project.clip(ids[1]).is_none());
+        assert_eq!(project.clip(ids[0]).unwrap().track, Track::Video(0));
+        assert_eq!(project.clip(ids[2]).unwrap().track, Track::Video(1));
+        assert_eq!(project.clip(audio).unwrap().track, Track::Audio(0));
+    }
+
+    #[test]
+    fn last_track_of_a_kind_stays() {
+        let mut project = Project::default();
+        assert!(!project.remove_track(Track::Video(0)));
+        project.add_track(false);
+        assert_eq!(project.tracks, Tracks { video: 1, audio: 2 });
+        assert!(project.remove_track(Track::Audio(0)));
+        assert!(!project.remove_track(Track::Audio(0)));
+    }
+
+    #[test]
+    fn load_raises_counts_to_cover_clips() {
+        let mut project = Project::default();
+        let source = project.add_source("a.mp4".into());
+        project.append_clip(source, Track::Audio(2), 1.0);
+        project.cover_clip_tracks();
+        assert_eq!(project.tracks, Tracks { video: 1, audio: 3 });
     }
 }

@@ -11,7 +11,7 @@ use egui::{Context, ViewportCommand};
 use crate::config::{AppConfig, config_path};
 use crate::ffmpeg::Ffmpeg;
 use crate::media::MediaCache;
-use crate::model::Project;
+use crate::model::{Project, Track};
 use crate::render::Previewer;
 use crate::ui;
 use crate::ui::dialogs::{Outcome, SettingsDialog, UnsavedChoice};
@@ -59,6 +59,8 @@ enum Dialog {
     Settings(SettingsDialog),
     /// Settings accepted while the config file on disk is unreadable.
     OverwriteConfig(AppConfig, PathBuf),
+    /// A non-empty track the user wants gone.
+    DeleteTrack(Track),
     ProjectSettings(ProjectSettingsDialog),
     Export(ExportDialog),
 }
@@ -125,6 +127,10 @@ impl eframe::App for App {
         self.status_bar(ui);
         let timeline = self.timeline_panel(ui);
         self.timeline_busy = timeline.interacting;
+        if let Some(track) = timeline.delete_track {
+            self.dialog = Dialog::DeleteTrack(track);
+            ui.ctx().request_repaint();
+        }
         self.viewer(ui);
         self.settle(&timeline);
         ui::dialogs::errors(ui.ctx(), &mut self.errors);
@@ -258,6 +264,20 @@ impl App {
                         let config = config.clone();
                         self.dialog = Dialog::None;
                         self.apply_config(config);
+                    }
+                }
+            }
+            Dialog::DeleteTrack(track) => {
+                let track = *track;
+                let clips = self.project.clips_on(track).count();
+                match ui::dialogs::confirm_delete_track(ctx, track, clips) {
+                    Outcome::Open => {}
+                    Outcome::Cancelled => self.dialog = Dialog::None,
+                    Outcome::Accepted(()) => {
+                        self.dialog = Dialog::None;
+                        if self.project.remove_track(track) {
+                            self.timeline.track_removed(track);
+                        }
                     }
                 }
             }

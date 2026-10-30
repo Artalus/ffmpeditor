@@ -4,6 +4,7 @@ use egui::{Align, Align2, Context, Id, Label, Layout, Modal, ScrollArea, TextEdi
 
 use crate::config::AppConfig;
 use crate::ffmpeg::Ffmpeg;
+use crate::model::Track;
 
 pub enum Outcome<T> {
     Open,
@@ -36,6 +37,13 @@ pub fn confirm_overwrite(ctx: &Context, path: &Path) -> Outcome<()> {
     modal(ctx, "Unreadable config", |ui| {
         ui.label(format!("Overwrite unreadable config {}?", path.display()));
         confirm_buttons(ui, [("Overwrite", Some(()))])
+    })
+}
+
+pub fn confirm_delete_track(ctx: &Context, track: Track, clips: usize) -> Outcome<()> {
+    modal(ctx, "Delete track", |ui| {
+        ui.label(format!("Delete {track} and its {clips} clip(s)?"));
+        confirm_buttons(ui, [("Delete", Some(()))])
     })
 }
 

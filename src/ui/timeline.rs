@@ -2,14 +2,14 @@ mod edit;
 mod layout;
 mod paint;
 
-use egui::{CursorIcon, PointerButton, Pos2, Response, Sense, Ui, Vec2};
+use egui::{CursorIcon, PointerButton, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2};
 
 use self::edit::{
     ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, opposite_edge, range_selection,
 };
 use self::layout::{Areas, TimeAxis, TrackCounts, View, content_height, layout_lanes};
 use crate::media::MediaCache;
-use crate::model::{ClipId, Project, Span};
+use crate::model::{ClipId, Project, Span, Track};
 
 pub struct TimelineState {
     pixels_per_second: f32,
@@ -22,26 +22,23 @@ pub struct TimelineState {
     /// Vertical scroll of the track rows, points.
     scroll_y: f32,
     drag: Option<Drag>,
+    /// Per track index: it held a clip at some point this session, so an empty one hints at deletion.
+    used_video: Vec<bool>,
+    used_audio: Vec<bool>,
 }
 
 pub struct TimelineResponse {
     /// A drag is in progress; the app holds off undo snapshots until it ends.
     pub interacting: bool,
     pub playhead_moved: bool,
+    /// Non-empty track the user asked to delete; the app confirms first.
+    pub delete_track: Option<Track>,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Drag {
-    Clip {
-        edit: ClipDrag,
-        /// Rows are frozen while dragging, with a spare empty track of the clip's kind to
-        /// drop onto; otherwise it would keep reappearing under the pointer and pull the
-        /// clip ever higher.
-        tracks: TrackCounts,
-    },
-    Range {
-        anchor: f64,
-    },
+    Clip(ClipDrag),
+    Range { anchor: f64 },
 }
 
 pub fn show(
@@ -64,7 +61,8 @@ pub fn show(
         Sense::click_and_drag(),
     );
 
-    let lanes = layout_lanes(visible_tracks(state, project));
+    state.note_used_tracks(project);
+    let lanes = layout_lanes(TrackCounts::of(project));
     navigate(ui, state, project, &areas, content_height(&lanes));
     let view = View {
         axis: axis(state, &areas),
@@ -76,8 +74,6 @@ pub fn show(
     edit_clips(ui, &rows, state, project, media, &view);
     if state.drag.is_some() && !ruler.dragged() && !rows.dragged() {
         state.drag = None;
-        // Rows were frozen during the drag; drop the spare track right away.
-        ui.ctx().request_repaint();
     }
     set_cursor(ui, &ruler, &rows, state, project, &view);
 
@@ -90,16 +86,11 @@ pub fn show(
         visuals: ui.visuals(),
     };
     paint::timeline(ui.painter(), &scene);
+    let delete_track = track_controls(ui, state, project, &areas, &view);
     TimelineResponse {
         interacting: state.drag.is_some(),
         playhead_moved: state.playhead != playhead_before,
-    }
-}
-
-fn visible_tracks(state: &TimelineState, project: &Project) -> TrackCounts {
-    match state.drag {
-        Some(Drag::Clip { tracks, .. }) => tracks,
-        _ => TrackCounts::of(project),
+        delete_track,
     }
 }
 
@@ -206,16 +197,12 @@ fn edit_clips(
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && let Some((clip, zone)) = hit(view, project, origin)
         && let Some(edit) = ClipDrag::begin(project, clip, zone, axis.time(origin.x))
-        && let Some(video) = project.clip(clip).map(|c| c.track.is_video())
     {
         state.selected_clip = Some(clip);
-        state.drag = Some(Drag::Clip {
-            edit,
-            tracks: TrackCounts::of(project).with_spare(video),
-        });
+        state.drag = Some(Drag::Clip(edit));
     }
     if response.dragged()
-        && let Some(Drag::Clip { edit, .. }) = state.drag
+        && let Some(Drag::Clip(edit)) = state.drag
         && let Some(pos) = response.interact_pointer_pos()
         && let Some(clip) = project.clip(edit.clip)
     {
@@ -250,7 +237,7 @@ fn set_cursor(
     view: &View,
 ) {
     let icon = match state.drag {
-        Some(Drag::Clip { edit, .. }) => Some(zone_cursor(edit.zone)),
+        Some(Drag::Clip(edit)) => Some(zone_cursor(edit.zone)),
         Some(Drag::Range { .. }) => Some(CursorIcon::ResizeHorizontal),
         None => hover_cursor(ruler, rows, state, project, view),
     };
@@ -300,6 +287,93 @@ impl Default for TimelineState {
             selected_clip: None,
             scroll_y: 0.0,
             drag: None,
+            used_video: Vec::new(),
+            used_audio: Vec::new(),
         }
     }
+}
+
+impl TimelineState {
+    /// Called when the project drops a track, so the flags stay with their tracks.
+    pub fn track_removed(&mut self, track: Track) {
+        let used = self.used_mut(track.is_video());
+        if (track.index() as usize) < used.len() {
+            used.remove(track.index() as usize);
+        }
+    }
+
+    fn note_used_tracks(&mut self, project: &Project) {
+        self.used_video.resize(project.tracks.video as usize, false);
+        self.used_audio.resize(project.tracks.audio as usize, false);
+        for clip in &project.clips {
+            self.used_mut(clip.track.is_video())[clip.track.index() as usize] = true;
+        }
+    }
+
+    fn used_mut(&mut self, video: bool) -> &mut Vec<bool> {
+        if video {
+            &mut self.used_video
+        } else {
+            &mut self.used_audio
+        }
+    }
+
+    /// Hints that a track emptied this session could go; the last track of a kind can't.
+    pub(crate) fn shows_trash(&self, project: &Project, track: Track) -> bool {
+        let used = if track.is_video() {
+            &self.used_video
+        } else {
+            &self.used_audio
+        };
+        used.get(track.index() as usize).copied().unwrap_or(false)
+            && project.tracks.count(track.is_video()) > 1
+            && project.clips_on(track).next().is_none()
+    }
+}
+
+/// Drawn after the painted timeline so the widgets stay on top of it.
+fn track_controls(
+    ui: &mut Ui,
+    state: &mut TimelineState,
+    project: &mut Project,
+    areas: &Areas,
+    view: &View,
+) -> Option<Track> {
+    ui.scope_builder(UiBuilder::new().max_rect(areas.corner.shrink(2.0)), |ui| {
+        ui.menu_button("+ Track", |ui| {
+            for (label, video) in [("Video", true), ("Audio", false)] {
+                if ui.button(label).clicked() {
+                    project.add_track(video);
+                    ui.close();
+                }
+            }
+        });
+    });
+    let mut delete = None;
+    for lane in view.lanes.iter().filter(|l| l.is_primary()) {
+        let rect = Rect::from_x_y_ranges(areas.header.x_range(), view.lane_rect(lane).y_range());
+        let rect = rect.intersect(areas.header);
+        if rect.height() <= 0.0 {
+            continue;
+        }
+        let id = ui.make_persistent_id(("track_header", lane.track));
+        ui.interact(rect, id, Sense::click()).context_menu(|ui| {
+            let last = project.tracks.count(lane.track.is_video()) <= 1;
+            if ui.add_enabled(!last, egui::Button::new("Delete")).clicked() {
+                if project.clips_on(lane.track).next().is_some() {
+                    delete = Some(lane.track);
+                } else if project.remove_track(lane.track) {
+                    state.track_removed(lane.track);
+                }
+                ui.close();
+            }
+        });
+        // egui only hovers a hover-sense widget registered after the clickable one beneath it.
+        if state.shows_trash(project, lane.track) {
+            let id = ui.make_persistent_id(("track_trash", lane.track));
+            ui.interact(paint::trash_rect(rect), id, Sense::hover())
+                .on_hover_text("This track has no clips");
+        }
+    }
+    delete
 }

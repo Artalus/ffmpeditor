@@ -114,30 +114,11 @@ impl TimeAxis {
 }
 
 impl TrackCounts {
-    /// Tracks up to the highest used one, at least V1 and A1.
     pub fn of(project: &Project) -> Self {
-        let count = |video: bool| {
-            project
-                .clips
-                .iter()
-                .filter(|c| c.track.is_video() == video)
-                .map(|c| c.track.index() + 1)
-                .fold(1, u32::max)
-        };
         Self {
-            video: count(true),
-            audio: count(false),
+            video: project.tracks.video,
+            audio: project.tracks.audio,
         }
-    }
-
-    /// One more empty track of the given kind, to drag a clip onto.
-    pub fn with_spare(mut self, video: bool) -> Self {
-        if video {
-            self.video += 1;
-        } else {
-            self.audio += 1;
-        }
-        self
     }
 }
 
@@ -307,20 +288,13 @@ mod tests {
     }
 
     #[test]
-    fn track_counts_cover_used_tracks_only() {
+    fn track_counts_follow_the_project() {
         let empty = TrackCounts::of(&Project::default());
         assert_eq!(empty, TrackCounts { video: 1, audio: 1 });
         let used = counts_of([Track::Video(0), Track::Video(2)]);
         assert_eq!(used, TrackCounts { video: 3, audio: 1 });
         let audio = counts_of([Track::Audio(0), Track::Audio(1)]);
         assert_eq!(audio, TrackCounts { video: 1, audio: 2 });
-    }
-
-    #[test]
-    fn spare_track_is_added_to_one_kind() {
-        let base = TrackCounts::of(&Project::default());
-        assert_eq!(base.with_spare(true), TrackCounts { video: 2, audio: 1 });
-        assert_eq!(base.with_spare(false), TrackCounts { video: 1, audio: 2 });
     }
 
     #[test]

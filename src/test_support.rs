@@ -72,6 +72,7 @@ pub fn project<const N: usize>(clips: [(Track, f64, f64); N]) -> (Project, [Clip
         project.move_clip(id, start, track);
         id
     });
+    project.cover_clip_tracks();
     (project, ids)
 }
 
