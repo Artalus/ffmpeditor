@@ -285,16 +285,28 @@ fn header(painter: &Painter, scene: &Scene) {
             ("audio".to_owned(), visuals.weak_text_color())
         };
         let pos = pos2(rect.left() + 8.0, rect.center().y);
-        painter.text(
+        let name = painter.text(
             pos,
             Align2::LEFT_CENTER,
             text,
             FontId::proportional(12.0),
             color,
         );
+        if lane.is_primary() && scene.state.shows_trash(scene.project, lane.track) {
+            trash_icon(painter, pos2(name.right() + 9.0, rect.center().y), color);
+        }
     }
     let separator = visuals.widgets.noninteractive.bg_stroke;
     painter.vline(area.right() - 0.5, area.y_range(), separator);
+}
+
+/// Drawn by hand: the default fonts have no reliable trash glyph.
+fn trash_icon(painter: &Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.0, color);
+    let body = Rect::from_center_size(center + vec2(0.0, 1.5), vec2(6.0, 7.0));
+    painter.rect_stroke(body, 1.0, stroke, StrokeKind::Inside);
+    painter.hline(center.x - 4.0..=center.x + 4.0, center.y - 3.0, stroke);
+    painter.hline(center.x - 1.5..=center.x + 1.5, center.y - 4.5, stroke);
 }
 
 fn ruler(painter: &Painter, scene: &Scene, selection: Option<Rangef>) {
@@ -328,18 +340,7 @@ fn ruler(painter: &Painter, scene: &Scene, selection: Option<Rangef>) {
 }
 
 fn corner(painter: &Painter, scene: &Scene) {
-    let visuals = scene.visuals;
-    let rect = scene.areas.corner;
-    painter.rect_filled(rect, 0.0, visuals.panel_fill);
-    let text = format_time(scene.state.playhead, 2, false);
-    let font = FontId::monospace(11.0);
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        font,
-        visuals.strong_text_color(),
-    );
+    painter.rect_filled(scene.areas.corner, 0.0, scene.visuals.panel_fill);
 }
 
 /// The ruler draws its part of the selection band itself, beneath the tick labels.

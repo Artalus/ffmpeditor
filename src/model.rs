@@ -25,6 +25,20 @@ pub struct Tracks {
     pub audio: u32,
 }
 
+impl Tracks {
+    pub fn count(&self, video: bool) -> u32 {
+        if video { self.video } else { self.audio }
+    }
+
+    fn count_mut(&mut self, video: bool) -> &mut u32 {
+        if video {
+            &mut self.video
+        } else {
+            &mut self.audio
+        }
+    }
+}
+
 impl Default for Tracks {
     fn default() -> Self {
         Self { video: 1, audio: 1 }
@@ -123,30 +137,18 @@ impl Project {
     /// Hand-edited or older files may have clips beyond the stored track counts.
     pub fn cover_clip_tracks(&mut self) {
         for clip in &self.clips {
-            let count = if clip.track.is_video() {
-                &mut self.tracks.video
-            } else {
-                &mut self.tracks.audio
-            };
+            let count = self.tracks.count_mut(clip.track.is_video());
             *count = (*count).max(clip.track.index() + 1);
         }
     }
 
     pub fn add_track(&mut self, video: bool) {
-        if video {
-            self.tracks.video += 1;
-        } else {
-            self.tracks.audio += 1;
-        }
+        *self.tracks.count_mut(video) += 1;
     }
 
     /// Drops the track with its clips and renumbers the higher ones; refuses the last of a kind.
     pub fn remove_track(&mut self, track: Track) -> bool {
-        let count = if track.is_video() {
-            &mut self.tracks.video
-        } else {
-            &mut self.tracks.audio
-        };
+        let count = self.tracks.count_mut(track.is_video());
         if *count <= 1 {
             return false;
         }
