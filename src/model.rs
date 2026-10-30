@@ -6,7 +6,7 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
 const MIN_CLIP_DURATION: f64 = 0.04;
-const DEFAULT_TEXT_DURATION: f64 = 5.0;
+pub const DEFAULT_TEXT_DURATION: f64 = 5.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
