@@ -3,9 +3,9 @@ use egui::{
     pos2, vec2,
 };
 
-use super::TimelineState;
 use super::edit::FADE_HANDLE;
 use super::layout::{Areas, Lane, LaneKind, Ticks, TimeAxis, View, content_height};
+use super::{FadeHighlight, TimelineState};
 use crate::media::MediaCache;
 use crate::model::{Clip, Project};
 use crate::ui::format_time;
@@ -23,6 +23,7 @@ const FADE_SHADE: Color32 = Color32::from_black_alpha(120);
 const FADE_LINE: Color32 = Color32::from_gray(230);
 const CROSSFADE: Color32 = Color32::from_rgb(255, 205, 80);
 const FADE_HANDLE_FILL: Color32 = Color32::from_rgba_unmultiplied_const(255, 255, 255, 200);
+const FADE_HANDLE_HELD: Color32 = Color32::from_rgb(230, 60, 60);
 const LABEL_BG: Color32 = Color32::from_black_alpha(150);
 const LABEL_TEXT: Color32 = Color32::from_gray(235);
 const ERROR_TEXT: Color32 = Color32::from_rgb(255, 150, 150);
@@ -36,6 +37,7 @@ pub struct Scene<'a> {
     pub project: &'a Project,
     pub media: &'a MediaCache,
     pub visuals: &'a Visuals,
+    pub fade_highlight: Option<FadeHighlight>,
 }
 
 pub fn timeline(painter: &Painter, scene: &Scene) {
@@ -82,11 +84,17 @@ fn handles_in_lane(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rec
     let rect = clip_rect(scene, lane_rect, clip);
     let (fade_in, fade_out) = clip.fades(lane.kind == LaneKind::Video);
     let x = |t| axis.x(t).clamp(rect.left(), rect.right());
+    let video = lane.kind == LaneKind::Video;
+    let highlight = scene
+        .fade_highlight
+        .filter(|h| h.clip == clip.id && h.video == video)
+        .map(|h| (h.fade_in, h.held));
     // Clipped to the exact clip edges, not `inner`, so handle corners meet the crossfade marker.
     fade_handles(
         &painter.with_clip_rect(rect),
         rect,
         [x(clip.start + fade_in), x(clip.end() - fade_out)],
+        highlight,
     );
 }
 
@@ -270,7 +278,13 @@ fn fades(axis: &TimeAxis, rect: Rect, fade_in: f64, fade_out: f64) -> Vec<([Pos2
 }
 
 /// Drawn on every clip: the handles are the only hint that fades can be dragged.
-fn fade_handles(painter: &Painter, rect: Rect, [fade_in_x, fade_out_x]: [f32; 2]) {
+/// `highlight`: (fade_in, held) of the handle a drag would affect: tinted on hover, red once pressed.
+fn fade_handles(
+    painter: &Painter,
+    rect: Rect,
+    [fade_in_x, fade_out_x]: [f32; 2],
+    highlight: Option<(bool, bool)>,
+) {
     let size = FADE_HANDLE.min(rect.width() / 3.0);
     for (fade_in, x) in [(true, fade_in_x), (false, fade_out_x)] {
         // Right-angle corner at the fade end, mirroring the clip's own corner; kept inside the clip.
@@ -281,7 +295,15 @@ fn fade_handles(painter: &Painter, rect: Rect, [fade_in_x, fade_out_x]: [f32; 2]
         };
         let p = pos2(x, rect.top());
         let tri = vec![p, p + vec2(dx, 0.0), p + vec2(0.0, size)];
-        painter.add(Shape::convex_polygon(tri, FADE_HANDLE_FILL, Stroke::NONE));
+        let fill = match highlight {
+            Some((h, true)) if h == fade_in => FADE_HANDLE_HELD,
+            // Hover only tints, so it reads as "this one" without looking pressed.
+            Some((h, false)) if h == fade_in => {
+                FADE_HANDLE_FILL.lerp_to_gamma(FADE_HANDLE_HELD, 0.35)
+            }
+            _ => FADE_HANDLE_FILL,
+        };
+        painter.add(Shape::convex_polygon(tri, fill, Stroke::NONE));
     }
 }
 

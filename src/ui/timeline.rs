@@ -100,6 +100,7 @@ pub fn show(
         project,
         media,
         visuals: ui.visuals(),
+        fade_highlight: fade_highlight(ui, &rows, state, project, &view),
     };
     paint::timeline(ui.painter(), &scene);
     let delete_track = track_controls(ui, state, project, &areas, &view);
@@ -361,6 +362,50 @@ fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
         }
     }
     Some((id, zone))
+}
+
+/// The fade handle a drag would affect: hovered, or held from the moment the button goes down
+/// (egui reports a drag only after its threshold, too late for feedback).
+#[derive(Clone, Copy)]
+pub struct FadeHighlight {
+    pub clip: ClipId,
+    pub video: bool,
+    pub fade_in: bool,
+    pub held: bool,
+}
+
+fn fade_highlight(
+    ui: &Ui,
+    rows: &Response,
+    state: &TimelineState,
+    project: &Project,
+    view: &View,
+) -> Option<FadeHighlight> {
+    // The press origin stops matching once the handle follows the pointer away.
+    if let Some(Drag::Clip(ClipDrag {
+        clip,
+        zone: Zone::Fade { video, fade_in },
+        ..
+    })) = state.drag
+    {
+        return Some(FadeHighlight {
+            clip,
+            video,
+            fade_in,
+            held: true,
+        });
+    }
+    let (pressed, origin) = ui.input(|i| (i.pointer.primary_down(), i.pointer.press_origin()));
+    let pos = if pressed { origin } else { rows.hover_pos() }?;
+    match hit(view, project, pos)? {
+        (clip, Zone::Fade { video, fade_in }) => Some(FadeHighlight {
+            clip,
+            video,
+            fade_in,
+            held: pressed,
+        }),
+        _ => None,
+    }
 }
 
 fn set_cursor(
