@@ -170,25 +170,35 @@ fn base_video(target: &Target, rate: FrameRate, range: Span) -> String {
 }
 
 fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> String {
+    let (head, place) = match layer.clip.text() {
+        Some(text) => (text_source(layer, text, target, rate), String::new()),
+        None => media_head(layer, target, rate),
+    };
+    video_tail(index, layer, &head, &place)
+}
+
+/// Shared by every video kind: alpha format, placement, fades, label.
+/// Per-clip transforms (scale, opacity, position) belong here.
+fn video_tail(index: usize, layer: &Layer, head: &str, place: &str) -> String {
     let clip = layer.clip;
     let fade_in = clip.video.fade_in.max(layer.overlap_before);
-    let fade_out = clip.video.fade_out;
-    if let Some(text) = clip.text() {
-        let fades = fades("fade", ":alpha=1", clip, fade_in, fade_out);
-        let source = text_source(layer, text, target, rate);
-        return format!("{source},format=yuva420p{fades}[v{index}]");
-    }
+    let fades = fades("fade", ":alpha=1", clip, fade_in, clip.video.fade_out);
+    format!("{head},format=yuva420p{place}{fades}[v{index}]")
+}
+
+/// Input frames stamped at the clip's timeline position and fit into the frame,
+/// plus the padding that centers them in it.
+fn media_head(layer: &Layer, target: &Target, rate: FrameRate) -> (String, String) {
     let input = layer.input.as_ref().map_or(0, |i| i.index);
+    let (w, h, t0) = (target.width, target.height, secs(layer.visible.start));
     // Input-seeked frames are stamped relative to the seek point, keeping the sub-frame offset
     // of the first frame; fps start_time then pads the clip's first slot instead of leaving a gap.
-    format!(
-        "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
-         scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,\
-         format=yuva420p,pad={w}:{h}:-1:-1:color=black@0{fades}[v{index}]",
-        t0 = secs(layer.visible.start),
-        w = target.width,
-        h = target.height,
-        fades = fades("fade", ":alpha=1", clip, fade_in, fade_out),
+    (
+        format!(
+            "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
+             scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2"
+        ),
+        format!(",pad={w}:{h}:-1:-1:color=black@0"),
     )
 }
 
@@ -445,6 +455,27 @@ mod tests {
         }
     }
 
+    /// Filters of a chain without its output label: split at commas that are neither escaped
+    /// nor inside quotes.
+    fn filters(chain: &str) -> Vec<&str> {
+        let chain = chain.rfind('[').map_or(chain, |i| &chain[..i]);
+        let (mut out, mut start, mut quoted, mut escaped) = (vec![], 0, false, false);
+        for (i, c) in chain.char_indices() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '\'' => quoted = !quoted,
+                ',' if !quoted => {
+                    out.push(&chain[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&chain[start..]);
+        out
+    }
+
     #[test]
     fn inputs_cover_only_the_part_inside_the_range() {
         let mut tl = Timeline::new(640, 360, 30.0);
@@ -553,10 +584,15 @@ mod tests {
         tl.edit(clip).audio.fade_in = 0.5;
         tl.edit(clip).audio.fade_out = 20.0;
         let graph = tl.build(15.0, 30.0);
-        assert!(graph.chain("[0:v:0]").ends_with(
-            ",fade=t=in:st=10.000000:d=1.000000:alpha=1,\
-             fade=t=out:st=18.000000:d=2.000000:alpha=1[v0]"
-        ));
+        let video = filters(graph.chain("[0:v:0]"));
+        let fades: Vec<_> = video.iter().filter(|f| f.starts_with("fade=")).collect();
+        assert_eq!(
+            fades,
+            [
+                &"fade=t=in:st=10.000000:d=1.000000:alpha=1",
+                &"fade=t=out:st=18.000000:d=2.000000:alpha=1"
+            ]
+        );
         assert!(
             graph.chain("[0:a:0]").contains(
                 ",afade=t=in:st=10.000000:d=0.500000,afade=t=out:st=10.000000:d=10.000000,"
@@ -571,11 +607,8 @@ mod tests {
         tl.clip("b.mp4", Track::Video(0), 8.0, 10.0);
         let graph = tl.build(0.0, 18.0);
         assert!(!graph.chain("[0:v:0]").contains("fade"));
-        assert!(
-            graph
-                .chain("[1:v:0]")
-                .ends_with(",fade=t=in:st=8.000000:d=2.000000:alpha=1[v1]")
-        );
+        let fades = filters(graph.chain("[1:v:0]"));
+        assert!(fades.contains(&"fade=t=in:st=8.000000:d=2.000000:alpha=1"));
         assert!(
             graph
                 .chain("[0:a:0]")
@@ -672,12 +705,14 @@ mod tests {
         );
         assert!(chain.contains(&drawtext), "{chain}");
         assert!(chain.contains("fontcolor=0xffffffff:borderw=2:bordercolor=0x000000ff:"));
+        let filters = filters(chain);
         assert!(
-            chain.contains(
-                ":x=w*20/100-text_w/2:y=h*50/100-text_h/2,setpts=PTS+round(2.000000/TB),"
-            )
+            filters
+                .iter()
+                .any(|f| f.contains(":x=w*20/100-text_w/2:y=h*50/100-text_h/2"))
         );
-        assert!(chain.ends_with(",fade=t=in:st=2.000000:d=1.000000:alpha=1[v1]"));
+        assert!(filters.contains(&"setpts=PTS+round(2.000000/TB)"));
+        assert!(filters.contains(&"fade=t=in:st=2.000000:d=1.000000:alpha=1"));
         assert!(
             graph
                 .filter
