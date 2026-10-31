@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x86_64
+          - os: ubuntu-latest
+            name: linux-x86_64
+          - os: macos-latest
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - run: cargo build --profile minsizerel
+
+      # tar keeps the exec bit that a bare upload loses
+      - name: package
+        shell: bash
+        run: |
+          mkdir dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp target/minsizerel/ffmpeditor.exe "dist/ffmpeditor-${{ matrix.name }}.exe"
+          else
+            tar -czf "dist/ffmpeditor-${{ matrix.name }}.tar.gz" -C target/minsizerel ffmpeditor
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One rolling draft per Cargo.toml version, refreshed by every push.
+      # Once published, later pushes leave it alone until the version is bumped.
+      - name: draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          notes="main @ $GITHUB_SHA"
+          draft=$(gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null || echo none)
+          case "$draft" in
+            none)
+              gh release create "$tag" --draft --target "$GITHUB_SHA" --title "$tag" --notes "$notes" dist/* ;;
+            true)
+              gh release edit "$tag" --target "$GITHUB_SHA" --notes "$notes"
+              gh release upload "$tag" --clobber dist/* ;;
+            *)
+              echo "::warning::$tag is already published; bump version in Cargo.toml for a new draft" ;;
+          esac
