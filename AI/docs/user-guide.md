@@ -47,6 +47,7 @@ Right-click a track name > `Delete`. A track with clips asks first; its clips ar
 The last video and the last audio track can't be deleted.
 Trash icon: the track had clips this session and is now empty. Hover it for a tooltip.
 Click a track name, empty lane space or a clip to select its track. The selected track name is highlighted.
+A video track shows its audio lane only when one of its clips has audio.
 
 ## timeline
 Wheel scrolls. Ctrl+wheel zooms at the pointer. Alt+wheel, or wheel over track names, scrolls tracks.

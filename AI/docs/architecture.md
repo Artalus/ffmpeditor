@@ -28,7 +28,7 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - placement of new clips: start = playhead, track = selected track if its kind fits, else V1/A1. if the span overlaps a clip there: nearest track above of the same kind that is free over the span, else a new track; the app confirms either choice.
 
 ## timeline
-- rows: per video track a video lane + its linked audio lane; then one lane per audio track.
+- rows: per video track a video lane + its linked audio lane, the audio lane only if a clip on the track has audio (none for empty tracks or tracks of only text/images); then one lane per audio track. lane visibility is frozen while a clip is dragged, so rows do not shift under the pointer.
 - hit priority inside a lane: fade handle (top 8 px band) > trim edge (6 px) > mute region edge (audio lanes) > clip body.
 - fade handle sits where its fade ends; grabbed only on the side its triangle extends to, so stacked handles stay reachable.
 - snapping 8 px: clip edges, playhead, 0. fade drags also snap to the crossfade overlap.
