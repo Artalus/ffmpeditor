@@ -1,67 +1,56 @@
 use egui::{Color32, Popup, Response, Ui, color_picker};
 
-use crate::model::{Clip, Content};
+use crate::model::{Clip, Content, TextProps, Transform};
 
 const PANEL_WIDTH: f32 = 240.0;
 const SIZE_RANGE: std::ops::RangeInclusive<f64> = 4.0..=512.0;
 const PERCENT_RANGE: std::ops::RangeInclusive<f64> = 0.0..=100.0;
-const ANCHOR_PERCENT: [f64; 3] = [10.0, 50.0, 90.0];
+const SCALE_RANGE: std::ops::RangeInclusive<f64> = 1.0..=400.0;
+const TEXT_ANCHORS: [f64; 3] = [10.0, 50.0, 90.0];
 const ANCHOR_LABELS: [[&str; 3]; 3] = [["↖", "↑", "↗"], ["←", "•", "→"], ["↙", "↓", "↘"]];
 
-/// Side panel for a text clip. Returns true while a field is being edited,
-/// so the app snapshots one undo step per edit rather than per keystroke.
-pub fn show(ui: &mut Ui, clip: &mut Clip) -> bool {
-    let Content::Text { text } = &mut clip.content else {
-        return false;
-    };
-    let transform = &mut clip.transform;
+/// Side panel for a video-track clip. `fit` is the share of the frame width and height that
+/// media covers at 100 % scale, so presets keep it inside the frame; unused for text.
+/// Returns true while a field is being edited, so the app snapshots one undo step per edit
+/// rather than per keystroke.
+pub fn show(ui: &mut Ui, clip: &mut Clip, fit: (f64, f64)) -> bool {
     let mut editing = false;
     let mut track = |r: Response| editing |= r.has_focus() || r.dragged();
+    let is_text = clip.is_text();
+    let transform = &mut clip.transform;
     egui::Panel::right("properties")
         .default_size(PANEL_WIDTH)
         .show(ui, |ui| {
-            ui.heading("Text");
-            track(
-                ui.add(
-                    egui::TextEdit::multiline(&mut text.text)
-                        .desired_rows(3)
-                        .desired_width(f32::INFINITY),
-                ),
-            );
-            ui.horizontal(|ui| {
-                ui.label("Size");
-                track(
-                    ui.add(
-                        egui::DragValue::new(&mut text.size)
-                            .range(SIZE_RANGE)
-                            .suffix(" pt"),
-                    ),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                track(color_button(ui, &mut text.color));
-                ui.checkbox(&mut text.outline, "Outline");
-                ui.add_enabled_ui(text.outline, |ui| {
-                    track(color_button(ui, &mut text.outline_color));
-                });
-            });
-            ui.separator();
+            if let Content::Text { text } = &mut clip.content {
+                text_section(ui, text, &mut track);
+                ui.separator();
+            }
+            ui.heading("Transform");
             ui.horizontal(|ui| {
                 for (label, value) in [("X", &mut transform.x), ("Y", &mut transform.y)] {
                     ui.label(label);
-                    track(
-                        ui.add(
-                            egui::DragValue::new(value)
-                                .range(PERCENT_RANGE)
-                                .suffix(" %"),
-                        ),
-                    );
+                    track(percent(ui, value, PERCENT_RANGE));
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("Opacity");
+                track(percent(ui, &mut transform.opacity, PERCENT_RANGE));
+            });
+            if !is_text {
+                ui.horizontal(|ui| {
+                    ui.label("Scale");
+                    track(percent(ui, &mut transform.scale, SCALE_RANGE));
+                });
+            }
+            let anchors = if is_text {
+                [TEXT_ANCHORS; 2]
+            } else {
+                let half = |fit: f64| (fit * transform.scale / 2.0).min(50.0);
+                [fit.0, fit.1].map(|fit| [half(fit), 50.0, 100.0 - half(fit)])
+            };
             egui::Grid::new("anchors").show(ui, |ui| {
-                for (labels, y) in ANCHOR_LABELS.iter().zip(ANCHOR_PERCENT) {
-                    for (label, x) in labels.iter().zip(ANCHOR_PERCENT) {
+                for (labels, y) in ANCHOR_LABELS.iter().zip(anchors[1]) {
+                    for (label, x) in labels.iter().zip(anchors[0]) {
                         if ui.button(*label).clicked() {
                             (transform.x, transform.y) = (x, y);
                         }
@@ -69,8 +58,44 @@ pub fn show(ui: &mut Ui, clip: &mut Clip) -> bool {
                     ui.end_row();
                 }
             });
+            if ui.button("Reset").clicked() {
+                *transform = Transform::default();
+            }
         });
     editing || Popup::is_any_open(ui.ctx())
+}
+
+fn text_section(ui: &mut Ui, text: &mut TextProps, track: &mut impl FnMut(Response)) {
+    ui.heading("Text");
+    track(
+        ui.add(
+            egui::TextEdit::multiline(&mut text.text)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY),
+        ),
+    );
+    ui.horizontal(|ui| {
+        ui.label("Size");
+        track(
+            ui.add(
+                egui::DragValue::new(&mut text.size)
+                    .range(SIZE_RANGE)
+                    .suffix(" pt"),
+            ),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("Color");
+        track(color_button(ui, &mut text.color));
+        ui.checkbox(&mut text.outline, "Outline");
+        ui.add_enabled_ui(text.outline, |ui| {
+            track(color_button(ui, &mut text.outline_color));
+        });
+    });
+}
+
+fn percent(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>) -> Response {
+    ui.add(egui::DragValue::new(value).range(range).suffix(" %"))
 }
 
 /// Color picker button editing a `#rrggbbaa` string in place.
