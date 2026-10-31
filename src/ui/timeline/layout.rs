@@ -205,7 +205,7 @@ impl View {
     /// Clips of `lane` within view; text exists only in video lanes.
     pub fn lane_clips<'p>(&self, project: &'p Project, lane: &Lane) -> Vec<&'p Clip> {
         let mut clips = self.visible_clips(project, lane.track);
-        clips.retain(|c| lane.kind == LaneKind::Video || !c.is_text());
+        clips.retain(|c| lane.kind == LaneKind::Video || c.has_audio());
         clips
     }
 
