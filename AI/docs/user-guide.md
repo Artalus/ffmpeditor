@@ -19,14 +19,14 @@ Presets fill resolution, fps and bitrate.
 Codec fields accept any ffmpeg encoder name as a string; `⏷` lists common ones.
 
 ## media
-`Media` > `Import media` (Ctrl+I). Several files at once. Files that can't be read are reported.
+`Media` > `Import media` (Ctrl+I). Video, audio and still images (png, jpg, webp, bmp). Several files at once. Files that can't be read are reported.
 `Media` > `Add text` (Ctrl+T). The new text clip is selected.
 
 New clips go to the selected track, starting at the playhead.
-Video and text need a video track, audio-only files an audio track. If the selected track is the other kind, V1 or A1 is used.
+Video, images and text need a video track, audio-only files an audio track. If the selected track is the other kind, V1 or A1 is used.
 If the new clip would overlap a clip there, a dialog offers the nearest free track above. If there is none, it offers to create one. `Cancel` adds nothing.
 Several imported files are placed one after another.
-Text clips start 5 s long and can be trimmed to any length.
+Images and text clips start 5 s long and can be trimmed to any length.
 
 ## export
 `File` > `Export` (Ctrl+E).
@@ -53,7 +53,7 @@ Wheel scrolls. Ctrl+wheel zooms at the pointer. Alt+wheel, or wheel over track n
 Ruler: click moves the playhead and clears the range. Drag selects a range; its ends snap to clip edges and 0. Drag a range edge to resize it; clicking an edge keeps the range.
 
 ### clips
-Clips show thumbnails, waveform and file name. Text clips show their text.
+Clips show thumbnails, waveform and file name. Images repeat their picture. Text clips show their text.
 Click a clip to select it. Click empty space to deselect. Both move the playhead.
 Clicking a clip moves the playhead.
 
