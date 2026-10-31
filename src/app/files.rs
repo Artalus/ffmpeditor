@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::App;
 use super::history::History;
-use crate::model::{DEFAULT_TEXT_DURATION, Placement, Project, SourceId, Span, Track};
+use crate::model::{DEFAULT_GENERATED_DURATION, Placement, Project, SourceId, Span, Track};
 use crate::ui::timeline::TimelineState;
 use crate::ui::{file_name, with_default_ext};
 
@@ -88,10 +88,14 @@ impl App {
     fn probe_import(&mut self, path: &Path) -> anyhow::Result<(bool, SourceId, f64, bool)> {
         let known = self.project.sources.iter().any(|s| s.path == path);
         let id = self.project.add_source(path.to_path_buf());
-        let probed = self
-            .media
-            .add(id, path)
-            .and_then(|info| Ok((info.is_video()?, id, info.duration, !known)));
+        let probed = self.media.add(id, path).and_then(|info| {
+            let duration = if info.still {
+                DEFAULT_GENERATED_DURATION
+            } else {
+                info.duration
+            };
+            Ok((info.is_video()?, id, duration, !known))
+        });
         if probed.is_err() && !known {
             self.project.remove_source(id);
         }
@@ -115,7 +119,7 @@ impl App {
             .filter(|t| t.is_video() == video && t.index() < self.project.tracks.count(video))
             .unwrap_or(first);
         let total = if group.text {
-            DEFAULT_TEXT_DURATION
+            DEFAULT_GENERATED_DURATION
         } else {
             group.items.iter().map(|(_, d)| d).sum()
         };
@@ -164,7 +168,11 @@ impl App {
         }
         let mut start = group.start;
         for &(source, duration) in &group.items {
-            self.project.insert_clip(source, track, start, duration);
+            if self.media.info(source).is_some_and(|info| info.still) {
+                self.project.insert_still(source, track, start);
+            } else {
+                self.project.insert_clip(source, track, start, duration);
+            }
             start += duration;
         }
     }
