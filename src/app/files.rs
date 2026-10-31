@@ -9,6 +9,7 @@ use crate::ui::{file_name, with_default_ext};
 const PROJECT_EXT: &str = "toml";
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "flv", "ts"];
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "m4a", "opus", "aac"];
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp"];
 
 impl App {
     pub(super) fn new_project(&mut self) {
@@ -60,6 +61,7 @@ impl App {
             .set_title("Import media")
             .add_filter("Video", VIDEO_EXTENSIONS)
             .add_filter("Audio", AUDIO_EXTENSIONS)
+            .add_filter("Image", IMAGE_EXTENSIONS)
             .add_filter("All files", &["*"])
             .pick_files()
         else {

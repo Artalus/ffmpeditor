@@ -37,6 +37,8 @@ struct SourceState {
 #[derive(Default)]
 struct Thumbnails {
     layout: Option<thumbnails::Layout>,
+    /// A picture has the one thumbnail, for any source time.
+    still: bool,
     textures: Vec<egui::TextureHandle>,
     finished: bool,
 }
@@ -178,6 +180,7 @@ impl MediaCache {
         if let Some(video) = &info.video {
             let layout = thumbnails::Layout::new(info.duration, video);
             source.thumbnails.layout = Some(layout);
+            source.thumbnails.still = info.still;
             self.queue(id, JobKind::Thumbnails(layout), source);
         }
         if info.has_audio {
@@ -248,7 +251,11 @@ impl SourceState {
 
 impl Thumbnails {
     fn get(&self, source_time: f64) -> Option<&egui::TextureHandle> {
-        let index = self.layout.as_ref()?.index(source_time);
+        let index = if self.still {
+            0
+        } else {
+            self.layout.as_ref()?.index(source_time)
+        };
         // ffmpeg can emit a frame fewer than duration / interval; past the end show the last one.
         let index = if self.finished {
             index.min(self.textures.len().saturating_sub(1))
@@ -368,6 +375,18 @@ mod tests {
         cache.add(both, &fx.testsrc).unwrap();
         assert!(!is_loading(&cache, both));
         assert_eq!(cache.waveform(both).unwrap().peaks.len(), peaks);
+    }
+
+    #[test]
+    fn picture_has_one_thumbnail_and_no_waveform() {
+        let mut cache = cache();
+        let id = SourceId(1);
+        cache.add(id, &fixtures().picture).unwrap();
+        wait_for_extraction(&mut cache, &[id]);
+        assert_eq!(cache.error(id), None);
+        let first = cache.thumbnail(id, 0.0).unwrap().id();
+        assert_eq!(first, cache.thumbnail(id, 42.0).unwrap().id());
+        assert!(cache.waveform(id).is_none());
     }
 
     #[test]

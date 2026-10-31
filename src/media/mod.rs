@@ -22,7 +22,10 @@ const FALLBACK_FPS: f64 = 30.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MediaInfo {
+    /// Zero for still images, which have no duration of their own.
     pub duration: f64,
+    /// A picture: one video frame shown for as long as a clip asks.
+    pub still: bool,
     pub video: Option<VideoInfo>,
     pub has_audio: bool,
 }
@@ -64,7 +67,7 @@ pub fn probe(ffmpeg: &Ffmpeg, path: &Path) -> anyhow::Result<MediaInfo> {
 impl MediaInfo {
     /// Whether an imported source belongs on a video track (bringing its audio along) or an audio one.
     pub fn is_video(&self) -> anyhow::Result<bool> {
-        if self.duration <= 0.0 {
+        if self.duration <= 0.0 && !self.still {
             bail!("unknown duration");
         }
         match (&self.video, self.has_audio) {
@@ -98,6 +101,7 @@ struct Probe {
 #[derive(Default, Deserialize)]
 struct ProbeFormat {
     duration: Option<String>,
+    format_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -125,17 +129,28 @@ fn parse_probe(json: &[u8]) -> anyhow::Result<MediaInfo> {
     if video.is_none() && !has_audio {
         bail!("no video or audio streams");
     }
-    let duration = parse_seconds(&probe.format.duration)
-        .or_else(|| {
-            probe
-                .streams
-                .iter()
-                .filter_map(|s| parse_seconds(&s.duration))
-                .reduce(f64::max)
-        })
-        .context("unknown duration")?;
+    let duration = parse_seconds(&probe.format.duration).or_else(|| {
+        probe
+            .streams
+            .iter()
+            .filter_map(|s| parse_seconds(&s.duration))
+            .reduce(f64::max)
+    });
+    // Pictures come through image demuxers: png_pipe and friends report no duration,
+    // image2 (jpeg) reports one frame's worth.
+    let picture = probe
+        .format
+        .format_name
+        .as_deref()
+        .is_some_and(|name| name == "image2" || name.ends_with("_pipe"));
+    let still = video.is_some() && !has_audio && (picture || duration.is_none());
     Ok(MediaInfo {
-        duration,
+        duration: if still {
+            0.0
+        } else {
+            duration.context("unknown duration")?
+        },
+        still,
         video,
         has_audio,
     })
@@ -264,6 +279,23 @@ mod tests {
 
         let error = probe(&ffmpeg, Path::new("missing.mp4")).unwrap_err();
         assert!(error.to_string().contains("not found"), "{error}");
+    }
+
+    #[test]
+    fn probe_picture_is_still() {
+        let picture = || json!([{"codec_type": "video", "width": 64, "height": 48}]);
+        let info = parse(picture(), None).unwrap();
+        assert!(info.still && info.duration == 0.0 && info.video.is_some() && !info.has_audio);
+        assert!(info.is_video().unwrap());
+        assert!(!parse(picture(), Some("2.0")).unwrap().still);
+        let jpeg = json!({"streams": picture(), "format": {"format_name": "image2", "duration": "0.040000"}});
+        assert!(parse_probe(jpeg.to_string().as_bytes()).unwrap().still);
+    }
+
+    #[test]
+    fn probe_generated_picture() {
+        let info = probe(&test_support::ffmpeg(), &fixtures().picture).unwrap();
+        assert!(info.still && info.video.is_some(), "{info:?}");
     }
 
     #[test]
