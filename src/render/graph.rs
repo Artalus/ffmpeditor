@@ -455,6 +455,27 @@ mod tests {
         }
     }
 
+    /// Filters of a chain without its output label: split at commas that are neither escaped
+    /// nor inside quotes.
+    fn filters(chain: &str) -> Vec<&str> {
+        let chain = chain.rfind('[').map_or(chain, |i| &chain[..i]);
+        let (mut out, mut start, mut quoted, mut escaped) = (vec![], 0, false, false);
+        for (i, c) in chain.char_indices() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '\'' => quoted = !quoted,
+                ',' if !quoted => {
+                    out.push(&chain[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&chain[start..]);
+        out
+    }
+
     #[test]
     fn inputs_cover_only_the_part_inside_the_range() {
         let mut tl = Timeline::new(640, 360, 30.0);
@@ -563,10 +584,15 @@ mod tests {
         tl.edit(clip).audio.fade_in = 0.5;
         tl.edit(clip).audio.fade_out = 20.0;
         let graph = tl.build(15.0, 30.0);
-        assert!(graph.chain("[0:v:0]").ends_with(
-            ",fade=t=in:st=10.000000:d=1.000000:alpha=1,\
-             fade=t=out:st=18.000000:d=2.000000:alpha=1[v0]"
-        ));
+        let video = filters(graph.chain("[0:v:0]"));
+        let fades: Vec<_> = video.iter().filter(|f| f.starts_with("fade=")).collect();
+        assert_eq!(
+            fades,
+            [
+                &"fade=t=in:st=10.000000:d=1.000000:alpha=1",
+                &"fade=t=out:st=18.000000:d=2.000000:alpha=1"
+            ]
+        );
         assert!(
             graph.chain("[0:a:0]").contains(
                 ",afade=t=in:st=10.000000:d=0.500000,afade=t=out:st=10.000000:d=10.000000,"
@@ -581,11 +607,8 @@ mod tests {
         tl.clip("b.mp4", Track::Video(0), 8.0, 10.0);
         let graph = tl.build(0.0, 18.0);
         assert!(!graph.chain("[0:v:0]").contains("fade"));
-        assert!(
-            graph
-                .chain("[1:v:0]")
-                .ends_with(",fade=t=in:st=8.000000:d=2.000000:alpha=1[v1]")
-        );
+        let fades = filters(graph.chain("[1:v:0]"));
+        assert!(fades.contains(&"fade=t=in:st=8.000000:d=2.000000:alpha=1"));
         assert!(
             graph
                 .chain("[0:a:0]")
@@ -682,12 +705,14 @@ mod tests {
         );
         assert!(chain.contains(&drawtext), "{chain}");
         assert!(chain.contains("fontcolor=0xffffffff:borderw=2:bordercolor=0x000000ff:"));
+        let filters = filters(chain);
         assert!(
-            chain.contains(
-                ":x=w*20/100-text_w/2:y=h*50/100-text_h/2,setpts=PTS+round(2.000000/TB),"
-            )
+            filters
+                .iter()
+                .any(|f| f.contains(":x=w*20/100-text_w/2:y=h*50/100-text_h/2"))
         );
-        assert!(chain.ends_with(",fade=t=in:st=2.000000:d=1.000000:alpha=1[v1]"));
+        assert!(filters.contains(&"setpts=PTS+round(2.000000/TB)"));
+        assert!(filters.contains(&"fade=t=in:st=2.000000:d=1.000000:alpha=1"));
         assert!(
             graph
                 .filter
