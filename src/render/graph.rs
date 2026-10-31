@@ -67,7 +67,11 @@ pub fn build(project: &Project, infos: &MediaInfos, target: &Target) -> Graph {
     let rate = FrameRate::from_fps(project.settings.fps);
     let range = rate.snap(target.range);
     let layers = layers(project, infos, target, range);
-    let inputs = layers.iter().filter_map(input_args).flatten().collect();
+    let inputs = layers
+        .iter()
+        .filter_map(|layer| input_args(layer, rate))
+        .flatten()
+        .collect();
     let mut chains = vec![base_video(target, rate, range)];
     chains.extend(video_layers(&layers).map(|(i, layer)| clip_video(i, layer, target, rate)));
     chains.push(overlays(&layers));
@@ -145,17 +149,33 @@ fn audio_layers<'a, 'b>(layers: &'a [Layer<'b>]) -> impl Iterator<Item = (usize,
     layers.iter().enumerate().filter(|(_, layer)| layer.audio)
 }
 
-fn input_args(layer: &Layer) -> Option<[String; 6]> {
+fn input_args(layer: &Layer, rate: FrameRate) -> Option<Vec<String>> {
     let t0 = layer.visible.start;
     let input = layer.input.as_ref()?;
-    Some([
-        "-ss".into(),
-        secs(layer.clip.timeline_to_source(t0).max(0.0)),
-        "-t".into(),
-        secs(layer.input_end - t0),
-        "-i".into(),
-        input.path.to_string_lossy().into_owned(),
-    ])
+    let path = input.path.to_string_lossy().into_owned();
+    let args = if layer.clip.is_still() {
+        // A picture repeats for the visible part; there is nothing to seek in.
+        let len = secs(layer.visible.len());
+        [
+            "-loop",
+            "1",
+            "-framerate",
+            &rate.to_string(),
+            "-t",
+            &len,
+            "-i",
+            &path,
+        ]
+        .map(String::from)
+        .to_vec()
+    } else {
+        let source_t0 = secs(layer.clip.timeline_to_source(t0).max(0.0));
+        let len = secs(layer.input_end - t0);
+        ["-ss", &source_t0, "-t", &len, "-i", &path]
+            .map(String::from)
+            .to_vec()
+    };
+    Some(args)
 }
 
 /// Black canvas whose timestamps are absolute timeline time, like every clip's.

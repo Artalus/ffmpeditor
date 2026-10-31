@@ -122,7 +122,21 @@ impl TrackCounts {
     }
 }
 
-pub fn layout_lanes(counts: TrackCounts) -> Vec<Lane> {
+/// Per video track: whether it gets a linked-audio lane, i.e. some clip on it has audio.
+pub fn linked_audio(project: &Project) -> Vec<bool> {
+    (0..project.tracks.video)
+        .map(|i| {
+            let track = Track::Video(i);
+            project
+                .clips
+                .iter()
+                .any(|c| c.track == track && c.has_audio())
+        })
+        .collect()
+}
+
+/// `linked_audio` says which video tracks get their audio lane; tracks past its end get none.
+pub fn layout_lanes(counts: TrackCounts, linked_audio: &[bool]) -> Vec<Lane> {
     let mut lanes = Vec::new();
     let mut y = 0.0;
     let mut push = |track, kind, height, gap_after| {
@@ -135,13 +149,17 @@ pub fn layout_lanes(counts: TrackCounts) -> Vec<Lane> {
         y += height + gap_after;
     };
     for i in (0..counts.video).rev() {
-        push(Track::Video(i), LaneKind::Video, VIDEO_LANE_HEIGHT, 0.0);
-        push(
-            Track::Video(i),
-            LaneKind::Audio,
-            AUDIO_LANE_HEIGHT,
-            TRACK_GAP,
-        );
+        let linked = linked_audio.get(i as usize).copied().unwrap_or(false);
+        let gap = if linked { 0.0 } else { TRACK_GAP };
+        push(Track::Video(i), LaneKind::Video, VIDEO_LANE_HEIGHT, gap);
+        if linked {
+            push(
+                Track::Video(i),
+                LaneKind::Audio,
+                AUDIO_LANE_HEIGHT,
+                TRACK_GAP,
+            );
+        }
     }
     for i in 0..counts.audio {
         push(
@@ -306,7 +324,7 @@ mod tests {
 
     #[test]
     fn lanes_go_from_highest_video_down_to_audio() {
-        let lanes = layout_lanes(TrackCounts { video: 2, audio: 2 });
+        let lanes = layout_lanes(TrackCounts { video: 2, audio: 2 }, &[true; 2]);
         let order: Vec<_> = lanes.iter().map(|l| (l.track, l.kind)).collect();
         assert_eq!(
             order,
@@ -328,6 +346,31 @@ mod tests {
         assert!(lanes[0].is_primary() && !lanes[1].is_primary() && lanes[4].is_primary());
     }
 
+    #[test]
+    fn audio_lane_only_where_clips_have_audio() {
+        let (mut p, _) = project([(Track::Video(0), 0.0, 1.0), (Track::Video(1), 0.0, 1.0)]);
+        assert_eq!(linked_audio(&p), [true, true]);
+        p.tracks.video = 3;
+        assert_eq!(linked_audio(&p), [true, true, false]);
+        p.clips.retain(|c| c.track != Track::Video(0));
+        p.add_text(Track::Video(0), 0.0);
+        assert_eq!(linked_audio(&p), [false, true, false]);
+        let lanes = layout_lanes(TrackCounts::of(&p), &linked_audio(&p));
+        let order: Vec<_> = lanes.iter().map(|l| (l.track, l.kind)).collect();
+        assert_eq!(
+            order,
+            [
+                (Track::Video(2), LaneKind::Video),
+                (Track::Video(1), LaneKind::Video),
+                (Track::Video(1), LaneKind::Audio),
+                (Track::Video(0), LaneKind::Video),
+                (Track::Audio(0), LaneKind::Audio),
+            ]
+        );
+        assert_eq!(lanes[1].top, VIDEO_LANE_HEIGHT + TRACK_GAP);
+        assert_eq!(lanes[3].top, lanes[2].top + AUDIO_LANE_HEIGHT + TRACK_GAP);
+    }
+
     fn view(counts: TrackCounts) -> View {
         View {
             axis: TimeAxis {
@@ -335,7 +378,7 @@ mod tests {
                 scroll: 0.0,
                 pixels_per_second: 1.0,
             },
-            lanes: layout_lanes(counts),
+            lanes: layout_lanes(counts, &[true; 2]),
             rows: Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(500.0, 300.0)),
             content_top: 50.0,
         }

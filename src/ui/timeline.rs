@@ -8,7 +8,9 @@ use self::edit::{
     ClipDrag, SNAP_DISTANCE, Snapping, Zone, hit_clip, hit_fade, hit_region_edge, opposite_edge,
     range_selection,
 };
-use self::layout::{Areas, LaneKind, TimeAxis, TrackCounts, View, content_height, layout_lanes};
+use self::layout::{
+    Areas, LaneKind, TimeAxis, TrackCounts, View, content_height, layout_lanes, linked_audio,
+};
 use crate::media::MediaCache;
 use crate::model::{ClipId, Project, Span, Track};
 
@@ -32,6 +34,8 @@ pub struct TimelineState {
     /// Per track index: it held a clip at some point this session, so an empty one hints at deletion.
     used_video: Vec<bool>,
     used_audio: Vec<bool>,
+    /// Linked-audio lanes as laid out when a clip drag began, so rows hold still during it.
+    frozen_linked: Option<Vec<bool>>,
 }
 
 pub struct TimelineResponse {
@@ -79,7 +83,11 @@ pub fn show(
     );
 
     state.note_used_tracks(project);
-    let lanes = layout_lanes(TrackCounts::of(project));
+    let linked = state
+        .frozen_linked
+        .clone()
+        .unwrap_or_else(|| linked_audio(project));
+    let lanes = layout_lanes(TrackCounts::of(project), &linked);
     navigate(ui, state, project, &areas, content_height(&lanes));
     let view = View {
         axis: axis(state, &areas),
@@ -93,6 +101,8 @@ pub fn show(
     if state.drag.is_some() && !ruler.dragged() && !rows.dragged() {
         state.drag = None;
     }
+    state.frozen_linked = matches!(state.drag, Some(Drag::Clip(_)))
+        .then(|| state.frozen_linked.take().unwrap_or(linked));
     set_cursor(ui, &ruler, &rows, state, project, &view);
 
     let scene = paint::Scene {
@@ -482,6 +492,7 @@ impl Default for TimelineState {
             drag: None,
             used_video: Vec::new(),
             used_audio: Vec::new(),
+            frozen_linked: None,
         }
     }
 }

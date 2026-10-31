@@ -33,6 +33,8 @@ pub struct Fixtures {
     pub video_only: PathBuf,
     /// 2 s of a 440 Hz tone.
     pub audio_only: PathBuf,
+    /// One frame of 320x240 test pattern.
+    pub picture: PathBuf,
 }
 
 pub fn ffmpeg() -> Ffmpeg {
@@ -54,6 +56,7 @@ pub fn run_ok(cmd: &mut Command) -> Output {
 pub fn media_info(video: bool, audio: bool) -> MediaInfo {
     MediaInfo {
         duration: 3.0,
+        still: false,
         video: video.then_some(VideoInfo {
             width: 320,
             height: 240,
@@ -119,6 +122,11 @@ pub fn fixtures() -> &'static Fixtures {
             H264_AAC,
         ),
         audio_only: fixture("audio-only.wav", &["sine=frequency=440:duration=2"], &[]),
+        picture: fixture(
+            "picture.png",
+            &["testsrc2=size=320x240"],
+            &["-frames:v", "1"],
+        ),
     })
 }
 

@@ -6,7 +6,8 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
 const MIN_CLIP_DURATION: f64 = 0.04;
-pub const DEFAULT_TEXT_DURATION: f64 = 5.0;
+/// Length of new clips that have none of their own: text and still images.
+pub const DEFAULT_GENERATED_DURATION: f64 = 5.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -99,8 +100,15 @@ pub struct Clip {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Content {
-    Media { source: SourceId },
-    Text { text: TextProps },
+    /// A `still` source is a picture shown for the clip's whole duration.
+    Media {
+        source: SourceId,
+        #[serde(default, skip_serializing_if = "is_default")]
+        still: bool,
+    },
+    Text {
+        text: TextProps,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -322,14 +330,26 @@ impl Project {
         start: f64,
         duration: f64,
     ) -> ClipId {
-        self.push_clip(Content::Media { source }, track, start, duration)
+        let content = Content::Media {
+            source,
+            still: false,
+        };
+        self.push_clip(content, track, start, duration)
+    }
+
+    pub fn insert_still(&mut self, source: SourceId, track: Track, start: f64) -> ClipId {
+        let content = Content::Media {
+            source,
+            still: true,
+        };
+        self.push_clip(content, track, start, DEFAULT_GENERATED_DURATION)
     }
 
     pub fn add_text(&mut self, track: Track, start: f64) -> ClipId {
         let text = Content::Text {
             text: TextProps::default(),
         };
-        self.push_clip(text, track, start, DEFAULT_TEXT_DURATION)
+        self.push_clip(text, track, start, DEFAULT_GENERATED_DURATION)
     }
 
     fn push_clip(&mut self, content: Content, track: Track, start: f64, duration: f64) -> ClipId {
@@ -603,7 +623,7 @@ impl Clip {
 
     pub fn source(&self) -> Option<SourceId> {
         match self.content {
-            Content::Media { source } => Some(source),
+            Content::Media { source, .. } => Some(source),
             Content::Text { .. } => None,
         }
     }
@@ -619,15 +639,19 @@ impl Clip {
         self.text().is_some()
     }
 
+    pub fn is_still(&self) -> bool {
+        matches!(self.content, Content::Media { still: true, .. })
+    }
+
     // The per-kind answers below are the one place that tells content kinds apart.
 
     /// Cannot extend past the end of its source.
     pub fn length_limited(&self) -> bool {
-        !self.is_text()
+        !self.is_text() && !self.is_still()
     }
 
     pub fn has_audio(&self) -> bool {
-        !self.is_text()
+        !self.is_text() && !self.is_still()
     }
 
     /// Transform scale and position apply to the media frame; text is drawn on a full-frame canvas.
@@ -1182,5 +1206,22 @@ mod tests {
         let [media, text] = [media, text].map(|id| project.clip(id).unwrap());
         assert!(media.length_limited() && media.has_audio() && media.scalable());
         assert!(!text.length_limited() && !text.has_audio() && !text.scalable());
+        let source = project.add_source("a.png".into());
+        let still = project.insert_still(source, Track::Video(0), 0.0);
+        let still = project.clip(still).unwrap();
+        assert!(!still.length_limited() && !still.has_audio() && still.scalable());
+        assert_eq!(still.duration, DEFAULT_GENERATED_DURATION);
+    }
+
+    #[test]
+    fn still_flag_is_saved_only_when_set() {
+        let mut project = Project::default();
+        let source = project.add_source("a.png".into());
+        project.insert_clip(source, Track::Video(0), 0.0, 1.0);
+        project.insert_still(source, Track::Video(0), 1.0);
+        let toml = toml::to_string(&project).unwrap();
+        assert_eq!(toml.matches("still = true").count(), 1, "{toml}");
+        let loaded: Project = toml::from_str(&toml).unwrap();
+        assert_eq!(loaded.clips, project.clips);
     }
 }

@@ -481,3 +481,52 @@ fn preview_text_layer_is_transparent_outside_the_glyphs() {
     let image = render_preview(&tl, 1.0, process::MAX_INLINE_COMMAND_LINE);
     assert_eq!(classify(image.get_pixel(5, 5).0), Color::Red);
 }
+
+fn still_info() -> MediaInfo {
+    MediaInfo {
+        duration: 0.0,
+        still: true,
+        video: media_info(true, false).video,
+        has_audio: false,
+    }
+}
+
+#[test]
+fn still_input_loops_without_seeking() {
+    let mut tl = Timeline::new(320, 180, 30.0);
+    let source = tl.project.add_source("a.png".into());
+    tl.infos.insert(source, still_info());
+    tl.project.insert_still(source, Track::Video(0), 2.0);
+    let graph = tl.build(3.0, 4.0);
+    let inputs = graph.inputs.join(" ");
+    assert_eq!(inputs, "-loop 1 -framerate 30 -t 1.000000 -i a.png");
+    assert!(!graph.filter.contains("[0:a"), "{}", graph.filter);
+}
+
+#[test]
+fn preview_renders_scaled_moved_still() {
+    let mut tl = Timeline::new(320, 180, 30.0);
+    let source = tl.project.add_source(fixtures().picture.clone());
+    tl.infos.insert(source, still_info());
+    let clip = tl.project.insert_still(source, Track::Video(0), 0.0);
+    tl.edit(clip).transform = Transform {
+        x: 100.0,
+        y: 100.0,
+        scale: 50.0,
+        opacity: 100.0,
+    };
+    let image = render_preview(&tl, 1.0, process::MAX_INLINE_COMMAND_LINE);
+    assert_eq!(classify(image.get_pixel(5, 5).0), Color::Black);
+    let lit: u32 = (270..315)
+        .flat_map(|x| (140..175).map(move |y| (x, y)))
+        .map(|(x, y)| {
+            image
+                .get_pixel(x, y)
+                .0
+                .iter()
+                .map(|&c| u32::from(c))
+                .sum::<u32>()
+        })
+        .sum();
+    assert!(lit / (45 * 35) > 60, "{lit}");
+}

@@ -22,13 +22,13 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - fades stored per clip, separately for video and audio, seconds, `fade_in + fade_out <= duration`.
 - render applies effective fades: video fade-in and audio fade-in = max(stored, overlap with earlier clip); audio fade-out = max(stored, overlap with later clip); video fade-out = stored (later clip fades in over it).
 - mute: whole clip flag, plus regions in source time, kept sorted and merged; regions stick to content when clip moves/trims.
-- media info (duration, size, fps) is not saved; re-probed on open.
-- clip content: media (`source`) or text (`[clips.text]`: `text`, `size` in pt (1/1080 of frame height), `color` `#rrggbbaa`, `outline` bool, `outline_color` `#rrggbbaa`). a clip has exactly one. text clips are video only and have no length limit; trims are free.
+- media info (duration, size, fps) is not saved; re-probed on open. still images: a video stream read by an image demuxer (`image2` for jpeg, `*_pipe` for png etc.; duration missing or one frame) → `MediaInfo.still`.
+- clip content: media (`source`), still image (`source` + `still = true`) or text (`[clips.text]`: `text`, `size` in pt (1/1080 of frame height), `color` `#rrggbbaa`, `outline` bool, `outline_color` `#rrggbbaa`). a clip has exactly one. text clips and still images are video only and have no length limit; trims are free.
 - `[clips.transform]` for clips on video tracks: `x`, `y` = clip center in % of frame (default 50, 50), `scale` % (default 100 = fit frame; ignored by text, which uses its pt size), `opacity` % (default 100). skipped in the file when default.
 - placement of new clips: start = playhead, track = selected track if its kind fits, else V1/A1. if the span overlaps a clip there: nearest track above of the same kind that is free over the span, else a new track; the app confirms either choice.
 
 ## timeline
-- rows: per video track a video lane + its linked audio lane; then one lane per audio track.
+- rows: per video track a video lane + its linked audio lane, the audio lane only if a clip on the track has audio (none for empty tracks or tracks of only text/images); then one lane per audio track. lane visibility is frozen while a clip is dragged, so rows do not shift under the pointer.
 - hit priority inside a lane: fade handle (top 8 px band) > trim edge (6 px) > mute region edge (audio lanes) > clip body.
 - fade handle sits where its fade ends; grabbed only on the side its triangle extends to, so stacked handles stay reachable.
 - snapping 8 px: clip edges, playhead, 0. fade drags also snap to the crossfade overlap.
@@ -52,6 +52,7 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - `fps=..:start_time` pads a clip's first slot with its first source frame; without it a cut flashes black.
 - transform in the shared video tail: media is fit to the frame, then scaled by `scale`, then placed with its center at (`x`%, `y`%) via overlay coordinates, so clips may sit partly off-frame; text is placed by drawtext; opacity multiplies alpha (`colorchannelmixer=aa=`) before fades, so fades and opacity combine.
 - text: no input; transparent `color` source of frame size + `drawtext` (`fontfile` = Arial on windows/mac, DejaVu Sans on linux, `font=Sans` if none found; not fontconfig lookup, which in windows builds has no config and rescans all fonts every run, 20+ s cold; `fontsize` = pt × frame height / 1080, `fontcolor`, `borderw` + `bordercolor` (outline color) when outlined, `expansion=none`), centered on the transform point; then fades and overlay like any video layer.
+- still image: input `-loop 1 -framerate <fps> -t <visible len> -i <file>` (no `-ss`), then the media head (fit, scale, transform, fades) like video. no audio. timeline thumbnail = the picture, repeated.
 - audio: per-clip fades/mutes/volume, `aresample async` aligns streams starting after the seek point, `adelay` places the clip sample-exact, `amix` with silence base.
 - fades evaluated in absolute timeline time, so exporting a sub-range keeps partial fades exact.
 - preview frame = same graph over a one-frame range, built at reduced size (fits 960x540), PNG to stdout.
