@@ -407,14 +407,28 @@ impl App {
             .inner
     }
 
-    /// Shown for a selected text clip; true while one of its fields is being edited.
+    /// Shown for a selected video-track clip; true while one of its fields is being edited.
     fn properties_panel(&mut self, ui: &mut egui::Ui) -> bool {
-        let clip = self
+        let settings = &self.project.settings;
+        let frame = f64::from(settings.width) / f64::from(settings.height);
+        let Some(clip) = self
             .timeline
             .selected_clip
             .and_then(|id| self.project.clip_mut(id))
-            .filter(|c| c.is_text());
-        clip.is_some_and(|clip| ui::properties::show(ui, clip))
+            .filter(|c| c.track.is_video())
+        else {
+            return false;
+        };
+        let video = clip.source().and_then(|id| self.media.info(id)?.video);
+        let fit = video.map_or((1.0, 1.0), |v| {
+            let aspect = f64::from(v.width) / f64::from(v.height);
+            if aspect >= frame {
+                (1.0, frame / aspect)
+            } else {
+                (aspect / frame, 1.0)
+            }
+        });
+        ui::properties::show(ui, clip, fit)
     }
 
     fn viewer(&self, ui: &mut egui::Ui) {

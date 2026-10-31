@@ -426,7 +426,11 @@ fn preview_draws_text_with_special_characters_at_transform() {
     let mut tl = Timeline::new(320, 180, 30.0);
     let clip = tl.project.add_text(Track::Video(0), 0.0);
     let clip = tl.edit(clip);
-    clip.transform = Transform { x: 25.0, y: 75.0 };
+    clip.transform = Transform {
+        x: 25.0,
+        y: 75.0,
+        ..Transform::default()
+    };
     let Content::Text { text } = &mut clip.content else {
         unreachable!()
     };
@@ -449,6 +453,23 @@ fn preview_draws_text_with_special_characters_at_transform() {
             "{cx} {cy}"
         );
     }
+}
+
+#[test]
+fn preview_renders_scaled_moved_translucent_clip() {
+    let fx = fixtures();
+    let mut tl = Timeline::new(320, 180, 30.0);
+    let clip = tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 3.0);
+    tl.edit(clip).transform = Transform {
+        x: 100.0,
+        y: 100.0,
+        scale: 50.0,
+        opacity: 50.0,
+    };
+    let image = render_preview(&tl, 1.0, process::MAX_INLINE_COMMAND_LINE);
+    assert_eq!(classify(image.get_pixel(5, 5).0), Color::Black);
+    let [r, g, b] = image.get_pixel(300, 170).0;
+    assert!(r > 80 && r < 180 && g < 60 && b < 60, "{r} {g} {b}");
 }
 
 #[test]
