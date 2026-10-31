@@ -119,17 +119,25 @@ pub struct TextProps {
     pub outline_color: String,
 }
 
-/// Clip center in percent of the frame.
+/// Clip center in percent of the frame, scale of media in percent of its fit-to-frame size,
+/// opacity in percent.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Transform {
     pub x: f64,
     pub y: f64,
+    pub scale: f64,
+    pub opacity: f64,
 }
 
 impl Default for Transform {
     fn default() -> Self {
-        Self { x: 50.0, y: 50.0 }
+        Self {
+            x: 50.0,
+            y: 50.0,
+            scale: 100.0,
+            opacity: 100.0,
+        }
     }
 }
 
@@ -861,7 +869,12 @@ mod tests {
     fn text_clip_toml_roundtrip_with_defaults() {
         let (mut project, media) = project_with_clip(10.0);
         let text = project.add_text(Track::Video(1), 2.0);
-        project.clip_mut(text).unwrap().transform = Transform { x: 10.0, y: 90.0 };
+        project.clip_mut(text).unwrap().transform = Transform {
+            x: 10.0,
+            y: 90.0,
+            scale: 50.0,
+            opacity: 25.0,
+        };
         let toml = toml::to_string_pretty(&project).unwrap();
         assert!(toml.contains("[clips.text]"), "{toml}");
         assert!(toml.contains("[clips.transform]"), "{toml}");
@@ -876,6 +889,17 @@ mod tests {
         assert_eq!(clip.text().unwrap().size, 64.0);
         assert!(clip.text().unwrap().outline);
         assert_eq!(clip.transform, Transform::default());
+
+        let old = "[settings]\n[[clips]]\nid = 1\ntrack = \"V1\"\nstart = 0.0\nsource_in = 0.0\n\
+                   duration = 1.0\n[clips.text]\ntext = \"hi\"\n[clips.transform]\nx = 20.0\n";
+        let transform = toml::from_str::<Project>(old).unwrap().clips[0].transform;
+        assert_eq!(
+            transform,
+            Transform {
+                x: 20.0,
+                ..Transform::default()
+            }
+        );
     }
 
     #[test]

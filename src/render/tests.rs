@@ -426,7 +426,11 @@ fn preview_draws_text_with_special_characters_at_transform() {
     let mut tl = Timeline::new(320, 180, 30.0);
     let clip = tl.project.add_text(Track::Video(0), 0.0);
     let clip = tl.edit(clip);
-    clip.transform = Transform { x: 25.0, y: 75.0 };
+    clip.transform = Transform {
+        x: 25.0,
+        y: 75.0,
+        ..Transform::default()
+    };
     let Content::Text { text } = &mut clip.content else {
         unreachable!()
     };
