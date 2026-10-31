@@ -355,7 +355,12 @@ fn header(painter: &Painter, scene: &Scene) {
     painter.rect_filled(area, 0.0, visuals.extreme_bg_color);
     for lane in &scene.view.lanes {
         let rect = Rect::from_x_y_ranges(area.x_range(), scene.view.lane_rect(lane).y_range());
-        painter.rect_filled(rect, 0.0, lane_fill(lane, visuals));
+        let fill = if scene.state.selected_track == Some(lane.track) {
+            visuals.selection.bg_fill.gamma_multiply(0.5)
+        } else {
+            lane_fill(lane, visuals)
+        };
+        painter.rect_filled(rect, 0.0, fill);
         let (text, color) = if lane.is_primary() {
             (lane.track.to_string(), visuals.strong_text_color())
         } else {

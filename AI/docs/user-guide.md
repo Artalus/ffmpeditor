@@ -18,9 +18,13 @@ Unsaved changes: the window title shows `*`.
 Presets fill resolution, fps and bitrate.
 Codec fields accept any ffmpeg encoder name as a string; `⏷` lists common ones.
 
-## import
-`File` > `Import media` (Ctrl+I). Several files at once.
-Video goes to track V1, audio-only files to A1, after the last clip. Files that can't be read are reported.
+## media
+`Media` > `Import media` (Ctrl+I). Several files at once. Files that can't be read are reported.
+
+New clips go to the selected track, starting at the playhead.
+Video needs a video track, audio-only files an audio track. If the selected track is the other kind, V1 or A1 is used.
+If the new clip would overlap a clip there, a dialog offers the nearest free track above. If there is none, it offers to create one. `Cancel` adds nothing.
+Several imported files are placed one after another.
 
 ## export
 `File` > `Export` (Ctrl+E).
@@ -40,6 +44,7 @@ Aborted export leaves a partially written file.
 Right-click a track name > `Delete`. A track with clips asks first; its clips are deleted. Tracks above it move down.
 The last video and the last audio track can't be deleted.
 Trash icon: the track had clips this session and is now empty. Hover it for a tooltip.
+Click a track name, empty lane space or a clip to select its track. The selected track name is highlighted.
 
 ## timeline
 Wheel scrolls. Ctrl+wheel zooms at the pointer. Alt+wheel, or wheel over track names, scrolls tracks.

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::App;
 use super::history::History;
-use crate::model::Project;
+use crate::model::{Placement, Project, SourceId, Span, Track};
 use crate::ui::timeline::TimelineState;
 use crate::ui::{file_name, with_default_ext};
 
@@ -65,10 +65,91 @@ impl App {
         else {
             return;
         };
+        let mut groups = [true, false].map(|video| ImportGroup::new(video, self.timeline.playhead));
         for path in paths {
-            if let Err(err) = self.import_file(&path) {
-                self.report(format!("{}: {err:#}", path.display()));
+            match self.probe_import(&path) {
+                Ok((video, source, duration, new)) => {
+                    let group = &mut groups[usize::from(!video)];
+                    group.items.push((source, duration));
+                    group.new_sources.extend(new.then_some(source));
+                }
+                Err(err) => self.report(format!("{}: {err:#}", path.display())),
             }
+        }
+        for group in groups {
+            self.place(group);
+        }
+    }
+
+    /// Adds the source and probes it; a failed probe leaves no new source behind.
+    /// Returns (is video, source, duration, source is new).
+    fn probe_import(&mut self, path: &Path) -> anyhow::Result<(bool, SourceId, f64, bool)> {
+        let known = self.project.sources.iter().any(|s| s.path == path);
+        let id = self.project.add_source(path.to_path_buf());
+        let probed = self
+            .media
+            .add(id, path)
+            .and_then(|info| Ok((info.is_video()?, id, info.duration, !known)));
+        if probed.is_err() && !known {
+            self.project.remove_source(id);
+        }
+        probed
+    }
+
+    /// Places the group where it fits right away, or queues a confirmation for another track.
+    fn place(&mut self, mut group: ImportGroup) {
+        if group.items.is_empty() {
+            return;
+        }
+        let video = group.video;
+        let first = if video {
+            Track::Video(0)
+        } else {
+            Track::Audio(0)
+        };
+        let from = self
+            .timeline
+            .selected_track
+            .filter(|t| t.is_video() == video && t.index() < self.project.tracks.count(video))
+            .unwrap_or(first);
+        let total: f64 = group.items.iter().map(|(_, d)| d).sum();
+        match self
+            .project
+            .placement(from, Span::new(group.start, group.start + total))
+        {
+            Placement::Free(track) => self.insert_group(&group, track),
+            Placement::Above(target) => {
+                (group.from, group.target, group.create) = (from, target, false);
+                self.placements.push_back(group);
+            }
+            Placement::NewTrack => {
+                let target = from.with_index(self.project.tracks.count(video));
+                (group.from, group.target, group.create) = (from, target, true);
+                self.placements.push_back(group);
+            }
+        }
+    }
+
+    pub(super) fn finish_placement(&mut self, group: ImportGroup, accepted: bool) {
+        if !accepted {
+            for id in group.new_sources {
+                if self.project.clips.iter().all(|c| c.source != id) {
+                    self.project.remove_source(id);
+                }
+            }
+            return;
+        }
+        if group.create {
+            self.project.add_track(group.video);
+        }
+        self.insert_group(&group, group.target);
+    }
+
+    fn insert_group(&mut self, group: &ImportGroup, track: Track) {
+        let mut start = group.start;
+        for &(source, duration) in &group.items {
+            self.project.insert_clip(source, track, start, duration);
+            start += duration;
         }
     }
 
@@ -119,18 +200,38 @@ impl App {
             }
         }
     }
+}
 
-    fn import_file(&mut self, path: &Path) -> anyhow::Result<()> {
-        let known = self.project.sources.iter().any(|s| s.path == path);
-        let id = self.project.add_source(path.to_path_buf());
-        let placed = self.media.add(id, path).and_then(|info| {
-            let track = info.default_track()?;
-            self.project.append_clip(id, track, info.duration);
-            Ok(())
-        });
-        if placed.is_err() && !known {
-            self.project.remove_source(id);
+/// Probed files of one kind, placed back to back from `start`.
+pub struct ImportGroup {
+    video: bool,
+    start: f64,
+    /// (source, duration)
+    items: Vec<(SourceId, f64)>,
+    /// Sources this import added to the project, dropped again if the placement is cancelled.
+    new_sources: Vec<SourceId>,
+    /// Track the group was aimed at, and the one the confirmation offers instead.
+    pub from: Track,
+    pub target: Track,
+    /// The target track does not exist yet.
+    pub create: bool,
+}
+
+impl ImportGroup {
+    fn new(video: bool, start: f64) -> Self {
+        let track = if video {
+            Track::Video(0)
+        } else {
+            Track::Audio(0)
+        };
+        Self {
+            video,
+            start,
+            items: Vec::new(),
+            new_sources: Vec::new(),
+            from: track,
+            target: track,
+            create: false,
         }
-        placed
     }
 }

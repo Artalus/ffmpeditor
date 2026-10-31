@@ -7,7 +7,7 @@ use anyhow::{Context, bail};
 use serde::Deserialize;
 
 use crate::ffmpeg::{self, Ffmpeg};
-use crate::model::{SourceId, Track};
+use crate::model::SourceId;
 
 mod cache;
 mod thumbnails;
@@ -62,14 +62,14 @@ pub fn probe(ffmpeg: &Ffmpeg, path: &Path) -> anyhow::Result<MediaInfo> {
 }
 
 impl MediaInfo {
-    /// Track a freshly imported source goes to: video to V1 (bringing its audio along), audio-only to A1.
-    pub fn default_track(&self) -> anyhow::Result<Track> {
+    /// Whether an imported source belongs on a video track (bringing its audio along) or an audio one.
+    pub fn is_video(&self) -> anyhow::Result<bool> {
         if self.duration <= 0.0 {
             bail!("unknown duration");
         }
         match (&self.video, self.has_audio) {
-            (Some(_), _) => Ok(Track::Video(0)),
-            (None, true) => Ok(Track::Audio(0)),
+            (Some(_), _) => Ok(true),
+            (None, true) => Ok(false),
             (None, false) => bail!("no video or audio stream"),
         }
     }
@@ -267,19 +267,19 @@ mod tests {
     }
 
     #[test]
-    fn imported_media_goes_to_first_track_of_its_kind() {
-        let track = |video, audio| media_info(video, audio).default_track().unwrap();
-        assert_eq!(track(true, true), Track::Video(0));
-        assert_eq!(track(true, false), Track::Video(0));
-        assert_eq!(track(false, true), Track::Audio(0));
+    fn imported_media_goes_to_a_track_of_its_kind() {
+        let is_video = |video, audio| media_info(video, audio).is_video().unwrap();
+        assert!(is_video(true, true));
+        assert!(is_video(true, false));
+        assert!(!is_video(false, true));
     }
 
     #[test]
     fn unusable_media_has_no_track() {
-        assert!(media_info(false, false).default_track().is_err());
+        assert!(media_info(false, false).is_video().is_err());
         let mut info = media_info(true, true);
         info.duration = 0.0;
-        assert!(info.default_track().is_err());
+        assert!(info.is_video().is_err());
     }
 
     #[test]

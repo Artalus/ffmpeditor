@@ -91,6 +91,15 @@ pub struct Clip {
     pub audio: AudioProps,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    Free(Track),
+    /// The start track is taken; this higher one is free.
+    Above(Track),
+    /// No track of the kind is free.
+    NewTrack,
+}
+
 /// Serialized as "V1", "A2", ... (1-based) to stay readable in project files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
@@ -204,6 +213,7 @@ impl Project {
         self.clips.iter().filter(move |c| c.track == track)
     }
 
+    #[cfg(test)]
     fn track_end(&self, track: Track) -> f64 {
         latest_end(self.clips_on(track))
     }
@@ -221,12 +231,39 @@ impl Project {
         self.sources.retain(|s| s.id != id);
     }
 
+    #[cfg(test)]
     pub fn append_clip(&mut self, source: SourceId, track: Track, source_duration: f64) -> ClipId {
-        let id = self.next_clip_id();
         let start = self.track_end(track);
+        self.insert_clip(source, track, start, source_duration)
+    }
+
+    pub fn insert_clip(
+        &mut self,
+        source: SourceId,
+        track: Track,
+        start: f64,
+        duration: f64,
+    ) -> ClipId {
+        let id = self.next_clip_id();
         self.clips
-            .push(Clip::new(id, source, track, start, source_duration));
+            .push(Clip::new(id, source, track, start, duration));
         id
+    }
+
+    pub fn is_free(&self, track: Track, span: Span) -> bool {
+        self.clips_on(track)
+            .all(|c| c.span().intersect(span).is_none())
+    }
+
+    /// Where a new clip over `span` goes, starting from `track`: there, the nearest free track above, or a new one.
+    pub fn placement(&self, track: Track, span: Span) -> Placement {
+        if self.is_free(track, span) {
+            return Placement::Free(track);
+        }
+        (track.index() + 1..self.tracks.count(track.is_video()))
+            .map(|i| track.with_index(i))
+            .find(|&t| self.is_free(t, span))
+            .map_or(Placement::NewTrack, Placement::Above)
     }
 
     pub fn remove_clip(&mut self, id: ClipId) {
@@ -558,6 +595,13 @@ impl Track {
 
     pub fn is_video(self) -> bool {
         matches!(self, Track::Video(_))
+    }
+
+    pub fn with_index(self, index: u32) -> Self {
+        match self {
+            Track::Video(_) => Track::Video(index),
+            Track::Audio(_) => Track::Audio(index),
+        }
     }
 }
 
@@ -917,6 +961,30 @@ mod tests {
         assert_eq!(project.tracks, Tracks { video: 1, audio: 2 });
         assert!(project.remove_track(Track::Audio(0)));
         assert!(!project.remove_track(Track::Audio(0)));
+    }
+
+    #[test]
+    fn placement_climbs_to_the_nearest_free_track() {
+        let mut project = Project::default();
+        let source = project.add_source("a.mp4".into());
+        let span = Span::new(2.0, 4.0);
+        let v = Track::Video;
+        assert_eq!(project.placement(v(0), span), Placement::Free(v(0)));
+        project.insert_clip(source, v(0), 0.0, 3.0);
+        assert!(project.is_free(v(0), Span::new(3.0, 5.0)));
+        assert!(!project.is_free(v(0), span));
+        assert_eq!(project.placement(v(0), span), Placement::NewTrack);
+        project.add_track(true);
+        project.add_track(true);
+        project.insert_clip(source, v(1), 3.0, 1.0);
+        assert_eq!(project.placement(v(0), span), Placement::Above(v(2)));
+        assert_eq!(project.placement(v(1), span), Placement::Above(v(2)));
+        project.insert_clip(source, v(2), 2.5, 1.0);
+        assert_eq!(project.placement(v(0), span), Placement::NewTrack);
+        assert_eq!(
+            project.placement(Track::Audio(0), span),
+            Placement::Free(Track::Audio(0))
+        );
     }
 
     #[test]
