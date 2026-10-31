@@ -287,7 +287,7 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
             .selection
             .filter(|s| s.intersect(clip.span()).is_some());
         let label = if muted { "Unmute clip" } else { "Mute clip" };
-        let mutable = !clip.is_text();
+        let mutable = clip.has_audio();
         if ui.add_enabled(mutable, egui::Button::new(label)).clicked() {
             project.set_muted(id, !muted);
             ui.close();

@@ -16,7 +16,7 @@ const ANCHOR_LABELS: [[&str; 3]; 3] = [["↖", "↑", "↗"], ["←", "•", "�
 pub fn show(ui: &mut Ui, clip: &mut Clip, fit: (f64, f64)) -> bool {
     let mut editing = false;
     let mut track = |r: Response| editing |= r.has_focus() || r.dragged();
-    let is_text = clip.is_text();
+    let scalable = clip.scalable();
     let transform = &mut clip.transform;
     egui::Panel::right("properties")
         .default_size(PANEL_WIDTH)
@@ -36,13 +36,13 @@ pub fn show(ui: &mut Ui, clip: &mut Clip, fit: (f64, f64)) -> bool {
                 ui.label("Opacity");
                 track(percent(ui, &mut transform.opacity, PERCENT_RANGE));
             });
-            if !is_text {
+            if scalable {
                 ui.horizontal(|ui| {
                     ui.label("Scale");
                     track(percent(ui, &mut transform.scale, SCALE_RANGE));
                 });
             }
-            let anchors = if is_text {
+            let anchors = if !scalable {
                 [TEXT_ANCHORS; 2]
             } else {
                 let half = |fit: f64| (fit * transform.scale / 2.0).min(50.0);

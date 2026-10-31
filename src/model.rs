@@ -510,10 +510,10 @@ impl Project {
             return;
         };
         let end = clip.end();
-        let earliest = if clip.is_text() {
-            0.0
-        } else {
+        let earliest = if clip.length_limited() {
             (clip.start - clip.source_in).max(0.0)
+        } else {
+            0.0
         };
         let start = start.min(end - MIN_CLIP_DURATION).max(earliest);
         clip.source_in += start - clip.start;
@@ -525,10 +525,10 @@ impl Project {
         let Some(clip) = self.clip_mut(id) else {
             return;
         };
-        let latest = if clip.is_text() {
-            f64::INFINITY
-        } else {
+        let latest = if clip.length_limited() {
             clip.start + (source_duration - clip.source_in)
+        } else {
+            f64::INFINITY
         };
         let end = end.min(latest).max(clip.start + MIN_CLIP_DURATION);
         clip.duration = end - clip.start;
@@ -617,6 +617,22 @@ impl Clip {
 
     pub fn is_text(&self) -> bool {
         self.text().is_some()
+    }
+
+    // The per-kind answers below are the one place that tells content kinds apart.
+
+    /// Cannot extend past the end of its source.
+    pub fn length_limited(&self) -> bool {
+        !self.is_text()
+    }
+
+    pub fn has_audio(&self) -> bool {
+        !self.is_text()
+    }
+
+    /// Transform scale and position apply to the media frame; text is drawn on a full-frame canvas.
+    pub fn scalable(&self) -> bool {
+        !self.is_text()
     }
 
     pub fn end(&self) -> f64 {
@@ -1157,5 +1173,14 @@ mod tests {
         project.append_clip(source, Track::Audio(2), 1.0);
         project.cover_clip_tracks();
         assert_eq!(project.tracks, Tracks { video: 1, audio: 3 });
+    }
+
+    #[test]
+    fn content_kind_answers() {
+        let (mut project, media) = project_with_clip(10.0);
+        let text = project.add_text(Track::Video(0), 0.0);
+        let [media, text] = [media, text].map(|id| project.clip(id).unwrap());
+        assert!(media.length_limited() && media.has_audio() && media.scalable());
+        assert!(!text.length_limited() && !text.has_audio() && !text.scalable());
     }
 }

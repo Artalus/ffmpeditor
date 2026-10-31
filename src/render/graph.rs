@@ -182,7 +182,7 @@ fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> 
 fn video_tail(index: usize, layer: &Layer, head: &str) -> String {
     let clip = layer.clip;
     let Transform { scale, opacity, .. } = clip.transform;
-    let scale = if clip.text().is_none() && scale != 100.0 {
+    let scale = if clip.scalable() && scale != 100.0 {
         format!(",scale=iw*{scale}/100:ih*{scale}/100")
     } else {
         String::new()
@@ -298,12 +298,11 @@ fn overlays(layers: &[Layer]) -> String {
     let mut chain = String::new();
     let mut below = "base".to_owned();
     for (i, layer) in video_layers(layers) {
-        // Text is drawn on a full-frame canvas already.
-        let position = if layer.clip.text().is_some() {
-            String::new()
-        } else {
+        let position = if layer.clip.scalable() {
             let Transform { x, y, .. } = layer.clip.transform;
             format!(":x=main_w*{x}/100-overlay_w/2:y=main_h*{y}/100-overlay_h/2")
+        } else {
+            String::new()
         };
         chain += &format!("[{below}][v{i}]overlay=eof_action=pass{position}[ov{i}];");
         below = format!("ov{i}");
