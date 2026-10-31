@@ -7,6 +7,7 @@ pub enum Command {
     Save,
     SaveAs,
     Import,
+    AddText,
     Export,
     Quit,
     Undo,
@@ -38,6 +39,7 @@ const BINDINGS: &[(Command, &[KeyboardShortcut])] = &[
     (Command::Open, &[ctrl(Key::O)]),
     (Command::Save, &[ctrl(Key::S)]),
     (Command::Import, &[ctrl(Key::I)]),
+    (Command::AddText, &[ctrl(Key::T)]),
     (Command::Export, &[ctrl(Key::E)]),
     (Command::Undo, &[ctrl(Key::Z)]),
     (Command::Split, &[plain(Key::S)]),
@@ -91,6 +93,7 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &MenuState) -> Option<Command> {
             });
             ui.menu_button("Media", |ui| {
                 item(ui, &mut command, Command::Import, true);
+                item(ui, &mut command, Command::AddText, true);
             });
             ui.menu_button("Project", |ui| {
                 item(ui, &mut command, Command::ProjectSettings, true);
@@ -140,6 +143,7 @@ impl Command {
             Command::Save => "Save",
             Command::SaveAs => "Save as…",
             Command::Import => "Import media…",
+            Command::AddText => "Add text",
             Command::Export => "Export…",
             Command::Quit => "Quit",
             Command::Undo => "Undo",

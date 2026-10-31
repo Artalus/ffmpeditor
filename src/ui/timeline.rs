@@ -238,8 +238,9 @@ fn edit_clips(
         && let Some(clip) = project.clip(edit.clip)
     {
         let track = view.nearest_track(pos.y, clip.track.is_video());
-        let source_duration = media
-            .info(clip.source)
+        let source_duration = clip
+            .source()
+            .and_then(|source| media.info(source))
             .map_or(f64::INFINITY, |i| i.duration);
         let snapping = Snapping {
             playhead: state.playhead,
@@ -286,11 +287,12 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
             .selection
             .filter(|s| s.intersect(clip.span()).is_some());
         let label = if muted { "Unmute clip" } else { "Mute clip" };
-        if ui.button(label).clicked() {
+        let mutable = !clip.is_text();
+        if ui.add_enabled(mutable, egui::Button::new(label)).clicked() {
             project.set_muted(id, !muted);
             ui.close();
         }
-        let enabled = selection.is_some();
+        let enabled = mutable && selection.is_some();
         let range = selection.unwrap_or(Span::new(0.0, 0.0));
         if ui
             .add_enabled(enabled, egui::Button::new("Mute selection"))
@@ -330,13 +332,13 @@ fn clip_menu(rows: &Response, state: &mut TimelineState, project: &mut Project) 
 fn hit(view: &View, project: &Project, pos: Pos2) -> Option<(ClipId, Zone)> {
     let lane = view.lane_at(pos)?;
     let clips: Vec<_> = view
-        .visible_clips(project, lane.track)
+        .lane_clips(project, lane)
         .into_iter()
         .map(|c| (c.id, view.axis.x(c.start), view.axis.x(c.end())))
         .collect();
     let video = lane.kind == LaneKind::Video;
     let handles: Vec<_> = view
-        .visible_clips(project, lane.track)
+        .lane_clips(project, lane)
         .into_iter()
         .map(|c| {
             let (fade_in, fade_out) = c.fades(video);

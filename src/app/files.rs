@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::App;
 use super::history::History;
-use crate::model::{Placement, Project, SourceId, Span, Track};
+use crate::model::{DEFAULT_TEXT_DURATION, Placement, Project, SourceId, Span, Track};
 use crate::ui::timeline::TimelineState;
 use crate::ui::{file_name, with_default_ext};
 
@@ -98,7 +98,7 @@ impl App {
 
     /// Places the group where it fits right away, or queues a confirmation for another track.
     fn place(&mut self, mut group: ImportGroup) {
-        if group.items.is_empty() {
+        if group.items.is_empty() && !group.text {
             return;
         }
         let video = group.video;
@@ -112,7 +112,11 @@ impl App {
             .selected_track
             .filter(|t| t.is_video() == video && t.index() < self.project.tracks.count(video))
             .unwrap_or(first);
-        let total: f64 = group.items.iter().map(|(_, d)| d).sum();
+        let total = if group.text {
+            DEFAULT_TEXT_DURATION
+        } else {
+            group.items.iter().map(|(_, d)| d).sum()
+        };
         match self
             .project
             .placement(from, Span::new(group.start, group.start + total))
@@ -133,7 +137,7 @@ impl App {
     pub(super) fn finish_placement(&mut self, group: ImportGroup, accepted: bool) {
         if !accepted {
             for id in group.new_sources {
-                if self.project.clips.iter().all(|c| c.source != id) {
+                if self.project.clips.iter().all(|c| c.source() != Some(id)) {
                     self.project.remove_source(id);
                 }
             }
@@ -145,7 +149,17 @@ impl App {
         self.insert_group(&group, group.target);
     }
 
+    pub(super) fn add_text(&mut self) {
+        let mut group = ImportGroup::new(true, self.timeline.playhead);
+        group.text = true;
+        self.place(group);
+    }
+
     fn insert_group(&mut self, group: &ImportGroup, track: Track) {
+        if group.text {
+            let id = self.project.add_text(track, group.start);
+            self.timeline.selected_clip = Some(id);
+        }
         let mut start = group.start;
         for &(source, duration) in &group.items {
             self.project.insert_clip(source, track, start, duration);
@@ -208,6 +222,8 @@ pub struct ImportGroup {
     start: f64,
     /// (source, duration)
     items: Vec<(SourceId, f64)>,
+    /// A new text clip instead of media.
+    text: bool,
     /// Sources this import added to the project, dropped again if the placement is cancelled.
     new_sources: Vec<SourceId>,
     /// Track the group was aimed at, and the one the confirmation offers instead.
@@ -228,6 +244,7 @@ impl ImportGroup {
             video,
             start,
             items: Vec::new(),
+            text: false,
             new_sources: Vec::new(),
             from: track,
             target: track,

@@ -6,7 +6,7 @@ use super::graph::{self, Graph, Target};
 use super::preview::preview_args;
 use super::*;
 use crate::media::{MediaInfo, MediaInfos};
-use crate::model::{Clip, ClipId, Project, Span, Track};
+use crate::model::{Clip, ClipId, Content, Project, Span, Track, Transform};
 use crate::test_support::{ffmpeg, fixtures, media_info, output_path, run_ok, wait_until};
 
 pub struct Timeline {
@@ -323,13 +323,17 @@ impl Timeline {
     /// Graph of `start..end` at the project size, with audio.
     pub fn build(&self, start: f64, end: f64) -> Graph {
         let settings = &self.project.settings;
+        self.build_sized(start, end, settings.width, settings.height)
+    }
+
+    pub fn build_sized(&self, start: f64, end: f64, width: u32, height: u32) -> Graph {
         graph::build(
             &self.project,
             &self.infos,
             &Target {
                 range: Span { start, end },
-                width: settings.width,
-                height: settings.height,
+                width,
+                height,
                 audio: true,
                 input_lookahead: 0.0,
             },
@@ -415,4 +419,44 @@ fn classify([r, g, b]: [u8; 3]) -> Color {
         (..30, ..30, ..30) => Color::Black,
         _ => Color::Other([r, g, b]),
     }
+}
+
+#[test]
+fn preview_draws_text_with_special_characters_at_transform() {
+    let mut tl = Timeline::new(320, 180, 30.0);
+    let clip = tl.project.add_text(Track::Video(0), 0.0);
+    let clip = tl.edit(clip);
+    clip.transform = Transform { x: 25.0, y: 75.0 };
+    let Content::Text { text } = &mut clip.content else {
+        unreachable!()
+    };
+    text.text = "a:b,'c'[d]%e\\f;\r\nsecond".into();
+    text.size = 180.0;
+    text.outline = false;
+    for inline_limit in [process::MAX_INLINE_COMMAND_LINE, 0] {
+        let image = render_preview(&tl, 1.0, inline_limit);
+        let lit: Vec<_> = image
+            .enumerate_pixels()
+            .filter(|(_, _, p)| p.0.iter().all(|&c| c > 128))
+            .collect();
+        assert!(lit.len() > 100, "{} lit pixels", lit.len());
+        let mean = |f: fn(&(u32, u32, &image::Rgb<u8>)) -> u32| {
+            lit.iter().map(f).sum::<u32>() as f64 / lit.len() as f64
+        };
+        let (cx, cy) = (mean(|p| p.0), mean(|p| p.1));
+        assert!(
+            (cx - 80.0).abs() < 25.0 && (cy - 135.0).abs() < 25.0,
+            "{cx} {cy}"
+        );
+    }
+}
+
+#[test]
+fn preview_text_layer_is_transparent_outside_the_glyphs() {
+    let fx = fixtures();
+    let mut tl = Timeline::new(320, 180, 30.0);
+    tl.clip(&fx.red_16x9, Track::Video(0), 0.0, 3.0);
+    tl.project.add_text(Track::Video(1), 0.0);
+    let image = render_preview(&tl, 1.0, process::MAX_INLINE_COMMAND_LINE);
+    assert_eq!(classify(image.get_pixel(5, 5).0), Color::Red);
 }

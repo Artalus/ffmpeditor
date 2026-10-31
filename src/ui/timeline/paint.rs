@@ -13,6 +13,7 @@ use crate::ui::format_time;
 const CLIP_ROUNDING: f32 = 3.0;
 const VIDEO_CLIP: Color32 = Color32::from_rgb(50, 80, 135);
 const AUDIO_CLIP: Color32 = Color32::from_rgb(35, 100, 80);
+const TEXT_CLIP: Color32 = Color32::from_rgb(105, 70, 130);
 const ERROR_CLIP: Color32 = Color32::from_rgb(140, 35, 35);
 const CLIP_BORDER: Color32 = Color32::from_black_alpha(160);
 const SELECTED_BORDER: Color32 = Color32::WHITE;
@@ -60,7 +61,7 @@ fn lanes(painter: &Painter, scene: &Scene) {
             continue;
         }
         painter.rect_filled(rect, 0.0, lane_fill(lane, scene.visuals));
-        let clips = scene.view.visible_clips(scene.project, lane.track);
+        let clips = scene.view.lane_clips(scene.project, lane);
         // Shades go with each body so they darken only that clip's media; lines, names,
         // borders, the crossfade marker and handles follow in later passes so no shade covers them.
         for clip in &clips {
@@ -127,9 +128,10 @@ fn clip_in_lane(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, 
     let axis = &scene.view.axis;
     let rect = clip_rect(scene, lane_rect, clip);
     let drawn = drawn_rect(painter, rect);
-    let error = scene.media.error(clip.source);
+    let error = clip.source().and_then(|s| scene.media.error(s));
     let selected = scene.state.selected_clip == Some(clip.id);
     let base = match (error, lane.kind) {
+        (None, _) if clip.is_text() => TEXT_CLIP,
         (Some(_), _) => ERROR_CLIP,
         (None, LaneKind::Video) => VIDEO_CLIP,
         (None, LaneKind::Audio) => AUDIO_CLIP,
@@ -167,7 +169,12 @@ fn clip_decor(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, cl
         inner.line_segment(line, Stroke::new(1.5, FADE_LINE));
     }
     if lane.is_primary() {
-        label(&inner, scene, clip, scene.media.error(clip.source));
+        label(
+            &inner,
+            scene,
+            clip,
+            clip.source().and_then(|s| scene.media.error(s)),
+        );
     }
     let drawn = drawn_rect(painter, rect);
     let selected = scene.state.selected_clip == Some(clip.id);
@@ -181,9 +188,12 @@ fn clip_decor(painter: &Painter, scene: &Scene, lane: &Lane, lane_rect: Rect, cl
 
 /// Tiles are anchored at the clip start so they travel with the clip.
 fn thumbnails(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
+    let Some(source) = clip.source() else {
+        return;
+    };
     let aspect = scene
         .media
-        .info(clip.source)
+        .info(source)
         .and_then(|info| info.video)
         .filter(|video| video.width > 0 && video.height > 0)
         .map_or(16.0 / 9.0, |video| video.width as f32 / video.height as f32);
@@ -198,7 +208,7 @@ fn thumbnails(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
         let at = clip
             .timeline_to_source(scene.view.axis.time(x))
             .clamp(clip.source_in, clip.source_out());
-        if let Some(texture) = scene.media.thumbnail(clip.source, at) {
+        if let Some(texture) = scene.media.thumbnail(source, at) {
             let tile_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(tile, rect.height()));
             painter.image(texture.id(), tile_rect, FULL_UV, Color32::WHITE);
         }
@@ -208,7 +218,10 @@ fn thumbnails(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
 
 fn waveform(painter: &Painter, scene: &Scene, clip: &Clip, rect: Rect) {
     let mid = rect.center().y;
-    let Some(waveform) = scene.media.waveform(clip.source) else {
+    let Some(source) = clip.source() else {
+        return;
+    };
+    let Some(waveform) = scene.media.waveform(source) else {
         painter.hline(rect.x_range(), mid, Stroke::new(1.0, WAVEFORM_MUTED));
         return;
     };
@@ -316,11 +329,15 @@ fn cross_mark(painter: &Painter, x0: f32, x1: f32, lane_rect: Rect) {
 
 /// Pinned to the visible part of the clip so the name stays readable when the start is scrolled off.
 fn label(painter: &Painter, scene: &Scene, clip: &Clip, error: Option<&str>) {
-    let name = scene
-        .project
-        .source(clip.source)
-        .and_then(|s| s.path.file_stem())
-        .map_or_else(|| "?".to_owned(), |s| s.to_string_lossy().into_owned());
+    let name = match (clip.text(), clip.source()) {
+        (Some(text), _) => text.text.lines().next().unwrap_or_default().to_owned(),
+        (None, Some(source)) => scene
+            .project
+            .source(source)
+            .and_then(|s| s.path.file_stem())
+            .map_or_else(|| "?".to_owned(), |s| s.to_string_lossy().into_owned()),
+        (None, None) => "?".to_owned(),
+    };
     let lines =
         std::iter::once((name, LABEL_TEXT)).chain(error.map(|e| (e.to_owned(), ERROR_TEXT)));
     let mut pos = painter.clip_rect().left_top() + vec2(3.0, 2.0);

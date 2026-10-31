@@ -6,6 +6,7 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
 const MIN_CLIP_DURATION: f64 = 0.04;
+pub const DEFAULT_TEXT_DURATION: f64 = 5.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -78,7 +79,8 @@ pub struct Source {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub id: ClipId,
-    pub source: SourceId,
+    #[serde(flatten)]
+    pub content: Content,
     pub track: Track,
     /// Timeline position.
     pub start: f64,
@@ -89,6 +91,74 @@ pub struct Clip {
     pub video: VideoProps,
     #[serde(default, skip_serializing_if = "is_default")]
     pub audio: AudioProps,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transform: Transform,
+}
+
+/// A clip is either media or generated text, never both.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Content {
+    Media { source: SourceId },
+    Text { text: TextProps },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextProps {
+    pub text: String,
+    /// Points: 1 pt is 1/1080 of the frame height, at any project resolution.
+    #[serde(default = "default_text_size")]
+    pub size: f64,
+    /// `#rrggbbaa`.
+    #[serde(default = "default_text_color")]
+    pub color: String,
+    #[serde(default = "default_true")]
+    pub outline: bool,
+    /// `#rrggbbaa`.
+    #[serde(default = "default_outline_color")]
+    pub outline_color: String,
+}
+
+/// Clip center in percent of the frame.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Transform {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self { x: 50.0, y: 50.0 }
+    }
+}
+
+impl Default for TextProps {
+    fn default() -> Self {
+        Self {
+            text: "Text".into(),
+            size: default_text_size(),
+            color: default_text_color(),
+            outline: true,
+            outline_color: default_outline_color(),
+        }
+    }
+}
+
+fn default_text_size() -> f64 {
+    64.0
+}
+
+fn default_text_color() -> String {
+    "#ffffffff".into()
+}
+
+fn default_outline_color() -> String {
+    "#000000ff".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,9 +314,20 @@ impl Project {
         start: f64,
         duration: f64,
     ) -> ClipId {
+        self.push_clip(Content::Media { source }, track, start, duration)
+    }
+
+    pub fn add_text(&mut self, track: Track, start: f64) -> ClipId {
+        let text = Content::Text {
+            text: TextProps::default(),
+        };
+        self.push_clip(text, track, start, DEFAULT_TEXT_DURATION)
+    }
+
+    fn push_clip(&mut self, content: Content, track: Track, start: f64, duration: f64) -> ClipId {
         let id = self.next_clip_id();
         self.clips
-            .push(Clip::new(id, source, track, start, duration));
+            .push(Clip::new(id, content, track, start, duration));
         id
     }
 
@@ -421,7 +502,11 @@ impl Project {
             return;
         };
         let end = clip.end();
-        let earliest = (clip.start - clip.source_in).max(0.0);
+        let earliest = if clip.is_text() {
+            0.0
+        } else {
+            (clip.start - clip.source_in).max(0.0)
+        };
         let start = start.min(end - MIN_CLIP_DURATION).max(earliest);
         clip.source_in += start - clip.start;
         clip.start = start;
@@ -432,7 +517,11 @@ impl Project {
         let Some(clip) = self.clip_mut(id) else {
             return;
         };
-        let latest = clip.start + (source_duration - clip.source_in);
+        let latest = if clip.is_text() {
+            f64::INFINITY
+        } else {
+            clip.start + (source_duration - clip.source_in)
+        };
         let end = end.min(latest).max(clip.start + MIN_CLIP_DURATION);
         clip.duration = end - clip.start;
     }
@@ -490,17 +579,36 @@ impl Default for ProjectSettings {
 }
 
 impl Clip {
-    pub fn new(id: ClipId, source: SourceId, track: Track, start: f64, duration: f64) -> Self {
+    pub fn new(id: ClipId, content: Content, track: Track, start: f64, duration: f64) -> Self {
         Self {
             id,
-            source,
+            content,
             track,
             start,
             source_in: 0.0,
             duration,
             video: VideoProps::default(),
             audio: AudioProps::default(),
+            transform: Transform::default(),
         }
+    }
+
+    pub fn source(&self) -> Option<SourceId> {
+        match self.content {
+            Content::Media { source } => Some(source),
+            Content::Text { .. } => None,
+        }
+    }
+
+    pub fn text(&self) -> Option<&TextProps> {
+        match &self.content {
+            Content::Text { text } => Some(text),
+            Content::Media { .. } => None,
+        }
+    }
+
+    pub fn is_text(&self) -> bool {
+        self.text().is_some()
     }
 
     pub fn end(&self) -> f64 {
@@ -750,6 +858,37 @@ mod tests {
     }
 
     #[test]
+    fn text_clip_toml_roundtrip_with_defaults() {
+        let (mut project, media) = project_with_clip(10.0);
+        let text = project.add_text(Track::Video(1), 2.0);
+        project.clip_mut(text).unwrap().transform = Transform { x: 10.0, y: 90.0 };
+        let toml = toml::to_string_pretty(&project).unwrap();
+        assert!(toml.contains("[clips.text]"), "{toml}");
+        assert!(toml.contains("[clips.transform]"), "{toml}");
+        assert_eq!(toml.matches("source = ").count(), 1, "{toml}");
+        assert_eq!(toml::from_str::<Project>(&toml).unwrap(), project);
+        assert!(project.clip(media).unwrap().source().is_some());
+
+        let minimal = "[settings]\n[[clips]]\nid = 1\ntrack = \"V1\"\nstart = 0.0\n\
+                       source_in = 0.0\nduration = 1.0\n[clips.text]\ntext = \"hi\"\n";
+        let parsed: Project = toml::from_str(minimal).unwrap_or_default();
+        let clip = &parsed.clips[0];
+        assert_eq!(clip.text().unwrap().size, 64.0);
+        assert!(clip.text().unwrap().outline);
+        assert_eq!(clip.transform, Transform::default());
+    }
+
+    #[test]
+    fn text_clips_trim_freely() {
+        let mut project = Project::default();
+        let id = project.add_text(Track::Video(0), 4.0);
+        project.trim_clip_start(id, 0.0);
+        project.trim_clip_end(id, 100.0, 1.0);
+        let c = project.clip(id).unwrap();
+        assert_eq!((c.start, c.duration), (0.0, 100.0));
+    }
+
+    #[test]
     fn default_props_are_not_serialized() {
         let (project, _) = project_with_clip(10.0);
         let text = toml::to_string_pretty(&project).unwrap();
@@ -787,7 +926,7 @@ mod tests {
     #[test]
     fn append_places_clips_back_to_back() {
         let (mut project, first) = project_with_clip(10.0);
-        let source = project.clip(first).unwrap().source;
+        let source = project.clip(first).unwrap().source().unwrap();
         let second = project.append_clip(source, Track::Video(0), 5.0);
         assert_eq!(project.clip(second).unwrap().start, 10.0);
         assert_eq!(project.duration(), 15.0);
@@ -861,7 +1000,7 @@ mod tests {
     #[test]
     fn overlaps_on_same_track() {
         let (mut project, first) = project_with_clip(10.0);
-        let source = project.clip(first).unwrap().source;
+        let source = project.clip(first).unwrap().source().unwrap();
         let second = project.append_clip(source, Track::Video(0), 10.0);
         project.move_clip(second, 8.0, Track::Video(0));
         let other_track = project.append_clip(source, Track::Video(1), 10.0);

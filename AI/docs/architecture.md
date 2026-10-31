@@ -23,6 +23,8 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - render applies effective fades: video fade-in and audio fade-in = max(stored, overlap with earlier clip); audio fade-out = max(stored, overlap with later clip); video fade-out = stored (later clip fades in over it).
 - mute: whole clip flag, plus regions in source time, kept sorted and merged; regions stick to content when clip moves/trims.
 - media info (duration, size, fps) is not saved; re-probed on open.
+- clip content: media (`source`) or text (`[clips.text]`: `text`, `size` in pt (1/1080 of frame height), `color` `#rrggbbaa`, `outline` bool, `outline_color` `#rrggbbaa`). a clip has exactly one. text clips are video only and have no length limit; trims are free.
+- `[clips.transform]`: `x`, `y` = clip center in % of frame (default 50, 50). used by text clips.
 - placement of new clips: start = playhead, track = selected track if its kind fits, else V1/A1. if the span overlaps a clip there: nearest track above of the same kind that is free over the span, else a new track; the app confirms either choice.
 
 ## timeline
@@ -33,12 +35,14 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - draw order per lane: clip bodies with media and own fade shade; fade lines, names, borders; crossfade X; handles.
 - trash hint: track had clips this session, is empty, is not the last of its kind.
 - selected track: set by clicking a track name, empty lane space or a clip; runtime only, not saved.
+- text clips: own body color, text as label, no thumbnails, empty linked audio lane.
 - edits mutate the project directly; app takes an undo snapshot when no drag is in progress.
 
 ## app
 - undo = whole-project snapshots, 500 steps.
 - shortcuts ignored while a dialog is open, a text field has focus, or a timeline drag runs. plain-key shortcuts require no modifiers.
-- `Media` menu: import through the placement rule. imported files are grouped by track kind; each group is placed back to back as one span, with at most one confirmation per group.
+- `Media` menu: import through the placement rule. imported files are grouped by track kind; each group is placed back to back as one span, with at most one confirmation per group. add text: a 5 s text clip through the same rule, then selected.
+- properties panel (right of viewer) edits the selected text clip. a focused panel field counts as an ongoing edit, so the undo snapshot is taken when it loses focus.
 - unreadable config: warning at start, confirmation before it is overwritten.
 
 ## render
@@ -46,6 +50,7 @@ egui/eframe gui around ffmpeg/ffprobe binaries. no ffmpeg linking; everything is
 - range is snapped to the project frame grid; fps is an exact rational (`30000/1001`), so NTSC stays on ffmpeg's own grid.
 - video: black canvas, clips overlaid in track/start order; fades are alpha fades (fade from black or crossfade over clip below).
 - `fps=..:start_time` pads a clip's first slot with its first source frame; without it a cut flashes black.
+- text: no input; transparent `color` source of frame size + `drawtext` (`fontfile` = Arial on windows/mac, DejaVu Sans on linux, `font=Sans` if none found; not fontconfig lookup, which in windows builds has no config and rescans all fonts every run, 20+ s cold; `fontsize` = pt × frame height / 1080, `fontcolor`, `borderw` + `bordercolor` (outline color) when outlined, `expansion=none`), centered on the transform point; then fades and overlay like any video layer.
 - audio: per-clip fades/mutes/volume, `aresample async` aligns streams starting after the seek point, `adelay` places the clip sample-exact, `amix` with silence base.
 - fades evaluated in absolute timeline time, so exporting a sub-range keeps partial fades exact.
 - preview frame = same graph over a one-frame range, built at reduced size (fits 960x540), PNG to stdout.

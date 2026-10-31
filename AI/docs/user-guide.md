@@ -20,11 +20,13 @@ Codec fields accept any ffmpeg encoder name as a string; `⏷` lists common ones
 
 ## media
 `Media` > `Import media` (Ctrl+I). Several files at once. Files that can't be read are reported.
+`Media` > `Add text` (Ctrl+T). The new text clip is selected.
 
 New clips go to the selected track, starting at the playhead.
-Video needs a video track, audio-only files an audio track. If the selected track is the other kind, V1 or A1 is used.
+Video and text need a video track, audio-only files an audio track. If the selected track is the other kind, V1 or A1 is used.
 If the new clip would overlap a clip there, a dialog offers the nearest free track above. If there is none, it offers to create one. `Cancel` adds nothing.
 Several imported files are placed one after another.
+Text clips start 5 s long and can be trimmed to any length.
 
 ## export
 `File` > `Export` (Ctrl+E).
@@ -51,7 +53,7 @@ Wheel scrolls. Ctrl+wheel zooms at the pointer. Alt+wheel, or wheel over track n
 Ruler: click moves the playhead and clears the range. Drag selects a range; its ends snap to clip edges and 0. Drag a range edge to resize it; clicking an edge keeps the range.
 
 ### clips
-Clips show thumbnails, waveform and file name.
+Clips show thumbnails, waveform and file name. Text clips show their text.
 Click a clip to select it. Click empty space to deselect. Both move the playhead.
 Clicking a clip moves the playhead.
 
@@ -80,6 +82,12 @@ Muted audio is drawn dim; muted regions are shaded.
 Drag the edge of a muted region to resize it. Dragging edge over another region merges them.
 Dragging both edges together asks to remove the region; `Cancel` restores it.
 Muted regions stay with the clip's content when it is moved or trimmed.
+
+## properties
+Panel right of the viewer, for the selected text clip.
+Text (several lines), size in pt (1/1080 of frame height, same look at any resolution), color, outline and its color.
+Position X, Y in % of the frame (text center). 3×3 buttons place it in a corner, at an edge middle or at the center.
+Each field edit is one undo step.
 
 ## preview
 The viewer shows the frame at the playhead, updated while scrubbing. There is no playback.
