@@ -84,9 +84,11 @@ Dragging both edges together asks to remove the region; `Cancel` restores it.
 Muted regions stay with the clip's content when it is moved or trimmed.
 
 ## properties
-Panel right of the viewer, for the selected text clip.
-Text (several lines), size in pt (1/1080 of frame height, same look at any resolution), color, outline and its color.
-Position X, Y in % of the frame (text center). 3×3 buttons place it in a corner, at an edge middle or at the center.
+Panel right of the viewer, for the selected clip on a video track.
+Text clips: text (several lines), size in pt (1/1080 of frame height, same look at any resolution), color, outline and its color.
+All video-track clips: position X, Y in % of the frame (clip center), opacity %. Media clips also: scale %; 100% fits the frame, like a clip on V1.
+3×3 buttons place the clip in a corner, at an edge middle or at the center, keeping it inside the frame.
+`Reset` restores 50/50 %, 100% scale, 100% opacity.
 Each field edit is one undo step.
 
 ## preview
