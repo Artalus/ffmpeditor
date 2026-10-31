@@ -170,25 +170,35 @@ fn base_video(target: &Target, rate: FrameRate, range: Span) -> String {
 }
 
 fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> String {
+    let (head, place) = match layer.clip.text() {
+        Some(text) => (text_source(layer, text, target, rate), String::new()),
+        None => media_head(layer, target, rate),
+    };
+    video_tail(index, layer, &head, &place)
+}
+
+/// Shared by every video kind: alpha format, placement, fades, label.
+/// Per-clip transforms (scale, opacity, position) belong here.
+fn video_tail(index: usize, layer: &Layer, head: &str, place: &str) -> String {
     let clip = layer.clip;
     let fade_in = clip.video.fade_in.max(layer.overlap_before);
-    let fade_out = clip.video.fade_out;
-    if let Some(text) = clip.text() {
-        let fades = fades("fade", ":alpha=1", clip, fade_in, fade_out);
-        let source = text_source(layer, text, target, rate);
-        return format!("{source},format=yuva420p{fades}[v{index}]");
-    }
+    let fades = fades("fade", ":alpha=1", clip, fade_in, clip.video.fade_out);
+    format!("{head},format=yuva420p{place}{fades}[v{index}]")
+}
+
+/// Input frames stamped at the clip's timeline position and fit into the frame,
+/// plus the padding that centers them in it.
+fn media_head(layer: &Layer, target: &Target, rate: FrameRate) -> (String, String) {
     let input = layer.input.as_ref().map_or(0, |i| i.index);
+    let (w, h, t0) = (target.width, target.height, secs(layer.visible.start));
     // Input-seeked frames are stamped relative to the seek point, keeping the sub-frame offset
     // of the first frame; fps start_time then pads the clip's first slot instead of leaving a gap.
-    format!(
-        "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
-         scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,\
-         format=yuva420p,pad={w}:{h}:-1:-1:color=black@0{fades}[v{index}]",
-        t0 = secs(layer.visible.start),
-        w = target.width,
-        h = target.height,
-        fades = fades("fade", ":alpha=1", clip, fade_in, fade_out),
+    (
+        format!(
+            "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
+             scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2"
+        ),
+        format!(",pad={w}:{h}:-1:-1:color=black@0"),
     )
 }
 
