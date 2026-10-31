@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::media::MediaInfos;
-use crate::model::{Clip, Project, Span, TextProps};
+use crate::model::{Clip, Project, Span, TextProps, Transform};
 
 const SAMPLE_RATE: u32 = 48_000;
 /// Text size is in points of this many per frame height.
@@ -170,35 +170,42 @@ fn base_video(target: &Target, rate: FrameRate, range: Span) -> String {
 }
 
 fn clip_video(index: usize, layer: &Layer, target: &Target, rate: FrameRate) -> String {
-    let (head, place) = match layer.clip.text() {
-        Some(text) => (text_source(layer, text, target, rate), String::new()),
+    let head = match layer.clip.text() {
+        Some(text) => text_source(layer, text, target, rate),
         None => media_head(layer, target, rate),
     };
-    video_tail(index, layer, &head, &place)
+    video_tail(index, layer, &head)
 }
 
-/// Shared by every video kind: alpha format, placement, fades, label.
-/// Per-clip transforms (scale, opacity, position) belong here.
-fn video_tail(index: usize, layer: &Layer, head: &str, place: &str) -> String {
+/// Shared by every video kind: scale (media only), alpha format, opacity, fades, label.
+/// Position is applied by `overlays`.
+fn video_tail(index: usize, layer: &Layer, head: &str) -> String {
     let clip = layer.clip;
+    let Transform { scale, opacity, .. } = clip.transform;
+    let scale = if clip.text().is_none() && scale != 100.0 {
+        format!(",scale=iw*{scale}/100:ih*{scale}/100")
+    } else {
+        String::new()
+    };
+    let opacity = if opacity == 100.0 {
+        String::new()
+    } else {
+        format!(",colorchannelmixer=aa={opacity}/100")
+    };
     let fade_in = clip.video.fade_in.max(layer.overlap_before);
     let fades = fades("fade", ":alpha=1", clip, fade_in, clip.video.fade_out);
-    format!("{head},format=yuva420p{place}{fades}[v{index}]")
+    format!("{head}{scale},format=yuva420p{opacity}{fades}[v{index}]")
 }
 
-/// Input frames stamped at the clip's timeline position and fit into the frame,
-/// plus the padding that centers them in it.
-fn media_head(layer: &Layer, target: &Target, rate: FrameRate) -> (String, String) {
+/// Input frames stamped at the clip's timeline position and fit into the frame.
+fn media_head(layer: &Layer, target: &Target, rate: FrameRate) -> String {
     let input = layer.input.as_ref().map_or(0, |i| i.index);
     let (w, h, t0) = (target.width, target.height, secs(layer.visible.start));
     // Input-seeked frames are stamped relative to the seek point, keeping the sub-frame offset
     // of the first frame; fps start_time then pads the clip's first slot instead of leaving a gap.
-    (
-        format!(
-            "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
+    format!(
+        "[{input}:v:0]setpts=PTS+round({t0}/TB),fps={rate}:start_time={t0},\
              scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2"
-        ),
-        format!(",pad={w}:{h}:-1:-1:color=black@0"),
     )
 }
 
@@ -290,8 +297,15 @@ fn escape(text: &str, special: &[char]) -> String {
 fn overlays(layers: &[Layer]) -> String {
     let mut chain = String::new();
     let mut below = "base".to_owned();
-    for (i, _) in video_layers(layers) {
-        chain += &format!("[{below}][v{i}]overlay=eof_action=pass[ov{i}];");
+    for (i, layer) in video_layers(layers) {
+        // Text is drawn on a full-frame canvas already.
+        let position = if layer.clip.text().is_some() {
+            String::new()
+        } else {
+            let Transform { x, y, .. } = layer.clip.transform;
+            format!(":x=main_w*{x}/100-overlay_w/2:y=main_h*{y}/100-overlay_h/2")
+        };
+        chain += &format!("[{below}][v{i}]overlay=eof_action=pass{position}[ov{i}];");
         below = format!("ov{i}");
     }
     chain + &format!("[{below}]setpts=PTS-STARTPTS,format=yuv420p[v]")
@@ -443,6 +457,7 @@ impl fmt::Display for FrameRate {
 mod tests {
     use super::*;
     use crate::model::Track;
+    use crate::model::Transform;
     use crate::render::tests::Timeline;
     use crate::test_support::media_info;
 
@@ -546,11 +561,37 @@ mod tests {
             .map(|input| input[5].as_str())
             .collect();
         assert_eq!(paths, ["v1-early.mp4", "v1-late.mp4", "v2.mp4", "a1.mp4"]);
-        assert!(graph.filter.contains(
-            "[base][v0]overlay=eof_action=pass[ov0];\
-             [ov0][v1]overlay=eof_action=pass[ov1];\
-             [ov1][v2]overlay=eof_action=pass[ov2];\
+        let pos = ":x=main_w*50/100-overlay_w/2:y=main_h*50/100-overlay_h/2";
+        assert!(graph.filter.contains(&format!(
+            "[base][v0]overlay=eof_action=pass{pos}[ov0];\
+             [ov0][v1]overlay=eof_action=pass{pos}[ov1];\
+             [ov1][v2]overlay=eof_action=pass{pos}[ov2];\
              [ov2]setpts=PTS-STARTPTS,format=yuv420p[v]"
+        )));
+    }
+
+    #[test]
+    fn media_transform_scales_fades_and_positions() {
+        let mut tl = Timeline::new(640, 360, 30.0);
+        let id = tl.clip("a.mp4", Track::Video(0), 0.0, 10.0);
+        let default = tl.build(0.0, 10.0);
+        let default = filters(default.chain("[0:v:0]"));
+        assert_eq!(default.len(), 4, "{default:?}");
+        tl.edit(id).video.fade_in = 1.0;
+        tl.edit(id).transform = Transform {
+            x: 120.0,
+            y: -10.0,
+            scale: 50.0,
+            opacity: 40.0,
+        };
+        let graph = tl.build(0.0, 10.0);
+        let chain = filters(graph.chain("[0:v:0]"));
+        assert_eq!(chain[3], "scale=iw*50/100:ih*50/100");
+        assert_eq!(chain[4], "format=yuva420p");
+        assert_eq!(chain[5], "colorchannelmixer=aa=40/100");
+        assert!(chain[6].starts_with("fade=t=in"), "{chain:?}");
+        assert!(graph.filter.contains(
+            "overlay=eof_action=pass:x=main_w*120/100-overlay_w/2:y=main_h*-10/100-overlay_h/2[ov0]"
         ));
     }
 
